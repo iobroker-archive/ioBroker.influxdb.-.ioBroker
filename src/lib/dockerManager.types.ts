@@ -487,7 +487,7 @@ export interface ContainerConfig {
 
     /** Detach & Auto-remove */
     detach?: boolean; // -d
-    // If true, container is removed after exit (cannot be used with restart policies)
+    /** If true, container is removed after exit (cannot be used with restart policies) */
     removeOnExit?: boolean; // --rm
 
     /** Ports */

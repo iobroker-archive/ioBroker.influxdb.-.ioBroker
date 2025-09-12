@@ -61,12 +61,12 @@ export function initAggregate(
     }
 
     // step; // 1 Step is 1 second
-    if (options.step === null) {
+    if (options.step === null || options.step === undefined || options.step <= 0) {
         options.step = (options.end! - options.start!) / options.count!;
     }
 
     // Limit 2000
-    if ((options.end! - options.start!) / options.step! > options.limit!) {
+    if ((options.end! - options.start!) / options.step > options.limit!) {
         options.step = (options.end! - options.start!) / options.limit!;
     }
 
@@ -75,7 +75,7 @@ export function initAggregate(
         options.maxIndex = options.timeIntervals.length - 1;
     } else {
         // MaxIndex is the index, that can really called without -1
-        options.maxIndex = Math.ceil((options.end! - options.start!) / options.step! - 1);
+        options.maxIndex = Math.ceil((options.end! - options.start!) / options.step - 1);
     }
     options.processing = [];
     options.result = []; // finalResult
@@ -344,7 +344,7 @@ function aggregationLogic(data: IobDataEntry, index: number, options: InternalHi
             options.processing[index].end.ts = data.ts;
             options.processing[index].end.val = data.val;
         } else {
-            if (data.val !== null) {
+            if (data.val !== null && data.val !== undefined) {
                 if (data.val > options.processing[index].max.val!) {
                     options.processing[index].max.ts = data.ts;
                     options.processing[index].max.val = data.val;

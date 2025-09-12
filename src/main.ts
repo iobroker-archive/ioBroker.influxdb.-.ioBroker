@@ -1,6 +1,6 @@
 import { statSync, readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import utils, { Adapter, type AdapterOptions, getAbsoluteDefaultDataDir } from '@iobroker/adapter-core'; // Get common adapter utils
+import { Adapter, type AdapterOptions, getAbsoluteDefaultDataDir } from '@iobroker/adapter-core'; // Get common adapter utils
 
 import DatabaseInfluxDB1x from './lib/DatabaseInfluxDB1x';
 import DatabaseInfluxDB2x from './lib/DatabaseInfluxDB2x';
@@ -15,8 +15,10 @@ import type {
 } from './types';
 import DockerManager from './lib/DockerManager';
 import type { ContainerConfig } from './lib/dockerManager.types';
-const dataDir = utils.getAbsoluteDefaultDataDir();
+const dataDir = getAbsoluteDefaultDataDir();
 let cacheFile = join(dataDir, 'influxdata.json');
+
+const dockerDefaultToken = Buffer.from('iobroker86645638546565652656').toString('base64');
 
 function isObject(it: any): boolean {
     // This is necessary because:
@@ -26,45 +28,21 @@ function isObject(it: any): boolean {
     return Object.prototype.toString.call(it) === '[object Object]';
 }
 
-function isEqual(a: InfluxDbCustomConfigTyped, b: InfluxDbCustomConfigTyped): boolean {
-    //console.log('Compare ' + JSON.stringify(a) + ' with ' +  JSON.stringify(b));
-    // Create arrays of property names
-    if (a === null || a === undefined || b === null || b === undefined) {
-        return a === b;
+function extractError(error: any): string {
+    if (typeof error === 'string') {
+        return error;
     }
-
-    const aProps: (keyof InfluxDbCustomConfigTyped)[] = Object.getOwnPropertyNames(
-        a,
-    ) as (keyof InfluxDbCustomConfigTyped)[];
-    const bProps: (keyof InfluxDbCustomConfigTyped)[] = Object.getOwnPropertyNames(
-        b,
-    ) as (keyof InfluxDbCustomConfigTyped)[];
-
-    // If the number of properties is different,
-    // objects are not equivalent
-    if (aProps.length !== bProps.length) {
-        //console.log('num props different: ' + JSON.stringify(aProps) + ' / ' + JSON.stringify(bProps));
-        return false;
-    }
-
-    for (let i = 0; i < aProps.length; i++) {
-        const propName = aProps[i];
-
-        if (typeof (a as any)[propName] !== typeof (b as any)[propName]) {
-            return false;
+    if (error instanceof Error) {
+        if (Array.isArray((error as any).errors) && (error as any).errors.length) {
+            return (error as any).errors.map((e: any) => (e.message ? e.message : JSON.stringify(e))).join(', ');
         }
-
-        // If values of same property are not equal,
-        // objects are not equivalent
-        if (a[propName] !== b[propName]) {
-            //console.log('props ' + propName + ' different');
-            return false;
-        }
+        return error.message;
+    }
+    if (error === null || error === undefined) {
+        return 'null';
     }
 
-    // If we made it this far, objects
-    // are considered equivalent
-    return true;
+    return error.toString();
 }
 
 function sortByTs(
@@ -105,8 +83,60 @@ function parseNumberWithNull(value: any): number | null {
     return null;
 }
 
+function normalizeStateConfig(
+    customConfig: InfluxDbCustomConfig,
+    defaultConfig: InfluxDBAdapterConfig,
+): InfluxDbCustomConfigTyped {
+    // debounceTime and debounce compatibility handling
+    if (!customConfig.blockTime && customConfig.blockTime !== '0' && customConfig.blockTime !== 0) {
+        if (!customConfig.debounce && customConfig.debounce !== '0' && customConfig.debounce !== 0) {
+            customConfig.blockTime = defaultConfig.blockTime || 0;
+        } else {
+            customConfig.blockTime = parseInt(customConfig.debounce as string, 10) || 0;
+        }
+    } else {
+        customConfig.blockTime = parseInt(customConfig.blockTime as string, 10) || 0;
+    }
+
+    customConfig.debounceTime = parseNumber(customConfig.debounceTime, 0);
+    customConfig.changesOnly = parseBool(customConfig.changesOnly);
+    customConfig.ignoreZero = parseBool(customConfig.ignoreZero);
+
+    // round
+    if (customConfig.round !== null && customConfig.round !== undefined && customConfig.round !== '') {
+        customConfig.round = parseInt(customConfig.round as string, 10);
+        if (!isFinite(customConfig.round) || customConfig.round < 0) {
+            customConfig.round = defaultConfig.round;
+        } else {
+            customConfig.round = Math.pow(10, parseInt(customConfig.round as unknown as string, 10));
+        }
+    } else {
+        customConfig.round = defaultConfig.round;
+    }
+
+    customConfig.ignoreAboveNumber = parseNumberWithNull(customConfig.ignoreAboveNumber);
+    customConfig.ignoreBelowNumber = parseNumberWithNull(customConfig.ignoreBelowNumber);
+    if (customConfig.ignoreBelowNumber === null && parseBool(customConfig.ignoreBelowZero)) {
+        customConfig.ignoreBelowNumber = 0;
+    }
+
+    customConfig.disableSkippedValueLogging = parseBool(
+        customConfig.disableSkippedValueLogging,
+        defaultConfig.disableSkippedValueLogging,
+    );
+    customConfig.enableDebugLogs = parseBool(customConfig.enableDebugLogs, defaultConfig.enableDebugLogs);
+    customConfig.changesRelogInterval = parseNumber(
+        customConfig.changesRelogInterval,
+        defaultConfig.changesRelogInterval as number,
+    );
+    customConfig.changesMinDelta = parseNumber(customConfig.changesMinDelta, defaultConfig.changesMinDelta);
+
+    customConfig.storageType ||= false;
+    return customConfig as InfluxDbCustomConfigTyped;
+}
+
 interface SavedInfluxDbCustomConfig extends InfluxDbCustomConfigTyped {
-    config: InfluxDbCustomConfigTyped;
+    config: string;
     realId: string;
     storageTypeAdjustedInternally: boolean;
     relogTimeout: NodeJS.Timeout | null;
@@ -176,128 +206,29 @@ export class InfluxDBAdapter extends Adapter {
                         delete this._aliasMap[id];
                     }
 
+                    // if not yet subscribed
                     if (!this._influxDPs[formerAliasId] && !this._subscribeAll) {
-                        // unsubscribe
-                        for (const _id in this._influxDPs) {
-                            this.unsubscribeForeignStates(this._influxDPs[_id].realId);
-                        }
-                        this._subscribeAll = true;
-                        this.subscribeForeignStates('*');
-                    }
-
-                    const customSettings: InfluxDbCustomConfig = obj.common.custom[this.namespace];
-
-                    // debounceTime and debounce compatibility handling
-                    if (
-                        !customSettings.blockTime &&
-                        customSettings.blockTime !== '0' &&
-                        customSettings.blockTime !== 0
-                    ) {
-                        if (
-                            !customSettings.debounce &&
-                            customSettings.debounce !== '0' &&
-                            customSettings.debounce !== 0
-                        ) {
-                            customSettings.blockTime = parseInt(this.config.blockTime as string, 10) || 0;
+                        if (Object.keys(this._influxDPs).length >= 19) {
+                            // unsubscribe all subscriptions and subscribe to all
+                            for (const _id in this._influxDPs) {
+                                this.unsubscribeForeignStates(this._influxDPs[_id].realId);
+                            }
+                            this._subscribeAll = true;
+                            this.subscribeForeignStates('*');
                         } else {
-                            customSettings.blockTime = parseInt(customSettings.debounce as string, 10) || 0;
+                            this.subscribeForeignStates(realId);
                         }
-                    } else {
-                        customSettings.blockTime = parseInt(customSettings.blockTime as string, 10) || 0;
-                    }
-                    if (
-                        !customSettings.debounceTime &&
-                        customSettings.debounceTime !== '0' &&
-                        customSettings.debounceTime !== 0
-                    ) {
-                        customSettings.debounceTime = parseInt(this.config.debounceTime as string, 10) || 0;
-                    } else {
-                        customSettings.debounceTime = parseInt(customSettings.debounceTime as string, 10) || 0;
                     }
 
-                    // changesOnly
-                    customSettings.changesOnly = parseBool(customSettings.changesOnly);
-
-                    // ignoreZero
-                    customSettings.ignoreZero = parseBool(customSettings.ignoreZero);
-
-                    // round
-                    if (
-                        customSettings.round !== null &&
-                        customSettings.round !== undefined &&
-                        customSettings.round !== ''
-                    ) {
-                        customSettings.round = parseInt(customSettings.round as string, 10);
-                        if (!isFinite(customSettings.round) || customSettings.round < 0) {
-                            customSettings.round = this.config.round;
-                        } else {
-                            customSettings.round = Math.pow(
-                                10,
-                                parseInt(customSettings.round as unknown as string, 10),
-                            );
-                        }
-                    } else {
-                        customSettings.round = this.config.round;
-                    }
-
-                    // ignoreAboveNumber
-                    if (
-                        customSettings.ignoreAboveNumber !== undefined &&
-                        customSettings.ignoreAboveNumber !== null &&
-                        customSettings.ignoreAboveNumber !== ''
-                    ) {
-                        customSettings.ignoreAboveNumber =
-                            parseFloat(customSettings.ignoreAboveNumber as string) || null;
-                    }
-
-                    // ignoreBelowNumber incl. ignoreBelowZero compatibility handling
-                    if (
-                        customSettings.ignoreBelowNumber !== undefined &&
-                        customSettings.ignoreBelowNumber !== null &&
-                        customSettings.ignoreBelowNumber !== ''
-                    ) {
-                        customSettings.ignoreBelowNumber =
-                            parseFloat(customSettings.ignoreBelowNumber as string) || null;
-                    } else if (parseBool(customSettings.ignoreBelowZero)) {
-                        customSettings.ignoreBelowNumber = 0;
-                    }
-
-                    // disableSkippedValueLogging
-                    if (
-                        customSettings.disableSkippedValueLogging !== undefined &&
-                        customSettings.disableSkippedValueLogging !== null &&
-                        customSettings.disableSkippedValueLogging !== ''
-                    ) {
-                        customSettings.disableSkippedValueLogging = parseBool(
-                            customSettings.disableSkippedValueLogging,
-                        );
-                    } else {
-                        customSettings.disableSkippedValueLogging = this.config.disableSkippedValueLogging;
-                    }
-
-                    // enableDebugLogs
-                    customSettings.enableDebugLogs = parseBool(
-                        customSettings.enableDebugLogs,
-                        this.config.enableDebugLogs,
+                    const customSettings: InfluxDbCustomConfig = normalizeStateConfig(
+                        obj.common.custom[this.namespace],
+                        this.config,
                     );
-
-                    customSettings.changesRelogInterval = parseNumber(
-                        customSettings.changesRelogInterval,
-                        this.config.changesRelogInterval as number,
-                    );
-
-                    customSettings.changesMinDelta = parseNumber(
-                        customSettings.changesMinDelta,
-                        this.config.changesMinDelta,
-                    );
-
-                    // storageType
-                    customSettings.storageType ||= false;
 
                     if (
                         this._influxDPs[formerAliasId]?.config &&
                         !this._influxDPs[formerAliasId].storageTypeAdjustedInternally &&
-                        isEqual(customSettings as InfluxDbCustomConfigTyped, this._influxDPs[formerAliasId].config)
+                        JSON.stringify(customSettings) === this._influxDPs[formerAliasId].config
                     ) {
                         if (customSettings.enableDebugLogs) {
                             this.log.debug(`Object ${id} unchanged. Ignore`);
@@ -332,7 +263,7 @@ export class InfluxDBAdapter extends Adapter {
 
                     id = formerAliasId;
 
-                    if (this._influxDPs[id] && this._influxDPs[id].config) {
+                    if (this._influxDPs[id]?.config) {
                         const relogTimeout = this._influxDPs[id].relogTimeout;
                         if (relogTimeout) {
                             clearTimeout(relogTimeout);
@@ -344,6 +275,9 @@ export class InfluxDBAdapter extends Adapter {
 
                         delete this._influxDPs[id];
                         this.log.info(`disabled logging of ${id}`);
+                        if (!this._subscribeAll) {
+                            this.unsubscribeForeignStates(id);
+                        }
                     }
                 }
             },
@@ -356,10 +290,10 @@ export class InfluxDBAdapter extends Adapter {
     setConnected(isConnected: boolean): void {
         if (this._connected !== isConnected) {
             this._connected = isConnected;
-            void this.setState('info.connection', this._connected, true, err =>
+            void this.setState('info.connection', this._connected, true, error =>
                 // analyse if the state could be set (because of permissions)
-                err
-                    ? this.log.error(`Can not update this._connected state: ${err}`)
+                error
+                    ? this.log.error(`Can not update this._connected state: ${error}`)
                     : this.log.debug(`connected set to ${this._connected}`),
             );
         }
@@ -397,7 +331,7 @@ export class InfluxDBAdapter extends Adapter {
                     this.log.debug('PING OK');
                 }
             } catch (error) {
-                this.log.error(`Error during ping: ${error}. Attempting reconnect.`);
+                this.log.error(`Error during ping: ${extractError(error)}. Attempting reconnect.`);
                 this.reconnect();
             }
         }
@@ -488,9 +422,9 @@ export class InfluxDBAdapter extends Adapter {
                 // Check and potentially update retention policy
                 try {
                     await this._client.applyRetentionPolicyToDB(this.config.dbname, this.config.retention as number);
-                } catch (err) {
-                    //Ignore issues with creating/altering retention policy, as it might be due to insufficient permissions
-                    this.log.warn(err);
+                } catch (error) {
+                    // Ignore issues with creating/altering retention policy, as it might be due to insufficient permissions
+                    this.log.warn(extractError(error));
                 }
 
                 if (this.config.dbversion === '2.x') {
@@ -500,17 +434,17 @@ export class InfluxDBAdapter extends Adapter {
                 // Check and potentially update retention policy
                 try {
                     await this._client.applyRetentionPolicyToDB(this.config.dbname, this.config.retention as number);
-                } catch (err) {
+                } catch (error) {
                     // Ignore issues with creating/altering retention policy, as it might be due to insufficient permissions
-                    this.log.warn(err);
+                    this.log.warn(extractError(error));
                 }
 
                 if (this.config.dbversion === '2.x') {
                     await this.checkMetaDataStorageType();
                 }
             }
-        } catch (err) {
-            this.log.error(err);
+        } catch (error) {
+            this.log.error(extractError(error));
             this.reconnect();
         }
     }
@@ -534,7 +468,7 @@ export class InfluxDBAdapter extends Adapter {
                 this.startPing();
             }
         } catch (error) {
-            this.log.error(`Error checking for metadata storage type: ${error}`);
+            this.log.error(`Error checking for metadata storage type: ${extractError(error)}`);
         }
     }
 
@@ -552,7 +486,7 @@ export class InfluxDBAdapter extends Adapter {
             const result = await this._client?.getRetentionPolicyForDB(this.config.dbname);
             this.sendTo(msg.from, msg.command, { result }, msg.callback);
         } catch (error) {
-            this.sendTo(msg.from, msg.command, { error: error.toString() }, msg.callback);
+            this.sendTo(msg.from, msg.command, { error: extractError(error) }, msg.callback);
         }
     }
 
@@ -561,8 +495,9 @@ export class InfluxDBAdapter extends Adapter {
         if (!msg || !msg.message || !isObject(msg.message.config)) {
             return this.sendTo(msg.from, msg.command, { error: 'Invalid test configuration.' }, msg.callback);
         }
-        msg.message.config.port = parseInt(msg.message.config.port, 10) || 0;
-        msg.message.config.requestTimeout = parseInt(msg.message.config.requestTimeout) || 30000;
+        const config: InfluxDBAdapterConfig = msg.message.config;
+        config.port = parseInt(config.port as string, 10) || 0;
+        config.requestTimeout = parseInt(config.requestTimeout as string) || 30000;
 
         let timeout: NodeJS.Timeout | null = null;
         try {
@@ -572,26 +507,38 @@ export class InfluxDBAdapter extends Adapter {
             }, 5000);
 
             let lClient;
-            this.log.debug(`TEST DB Version: ${msg.message.config.dbversion}`);
-            switch (msg.message.config.dbversion) {
+            this.log.debug(`TEST DB Version: ${config.dbversion}`);
+            let dockerCreated = false;
+            if (config.useDocker) {
+                // Start docker container if not running and then stop it
+                const influxDockerConfig: ContainerConfig = this.getDockerConfig(config);
+                if (!this.dockerManager) {
+                    dockerCreated = true;
+                    influxDockerConfig.stopOnUnload = true;
+                    influxDockerConfig.removeOnExit = true;
+                    this.dockerManager = new DockerManager(this, [influxDockerConfig]);
+                }
+            }
+
+            switch (config.dbversion) {
                 case '2.x':
                     this.log.info('Connecting to InfluxDB 2');
                     lClient = new DatabaseInfluxDB2x(
                         {
                             log: this.log,
-                            host: msg.message.config.host,
-                            port: msg.message.config.port,
-                            protocol: msg.message.config.protocol, // optional, default 'http'
-                            database: msg.message.config.dbname || 'iobroker',
-                            requestTimeout: msg.message.config.requestTimeout as number,
+                            host: config.host,
+                            port: config.port,
+                            protocol: config.protocol, // optional, default 'http'
+                            database: config.dbname || 'iobroker',
+                            requestTimeout: config.requestTimeout,
                             timePrecision: 'ms',
                         },
                         {
-                            path: msg.message.config.path, // optional, default '/'
-                            token: msg.message.config.token,
-                            organization: msg.message.config.organization,
-                            validateSSL: msg.message.config.validateSSL,
-                            useTags: msg.message.config.usetags,
+                            path: config.path, // optional, default '/'
+                            token: config.token,
+                            organization: config.organization,
+                            validateSSL: config.validateSSL,
+                            useTags: config.usetags,
                         },
                     );
                     break;
@@ -600,16 +547,16 @@ export class InfluxDBAdapter extends Adapter {
                     lClient = new DatabaseInfluxDB1x(
                         {
                             log: this.log,
-                            host: msg.message.config.host,
-                            port: msg.message.config.port, // optional, default 8086
-                            protocol: msg.message.config.protocol, // optional, default 'http'
-                            database: msg.message.config.dbname || 'iobroker',
-                            requestTimeout: msg.message.config.requestTimeout,
+                            host: config.host,
+                            port: config.port, // optional, default 8086
+                            protocol: config.protocol, // optional, default 'http'
+                            database: config.dbname || 'iobroker',
+                            requestTimeout: config.requestTimeout,
                             timePrecision: 'ms',
                         },
                         {
-                            username: msg.message.config.user,
-                            password: decodeURIComponent(msg.message.config.password || ''),
+                            username: config.user,
+                            password: decodeURIComponent(config.password || ''),
                         },
                     );
                     break;
@@ -622,19 +569,27 @@ export class InfluxDBAdapter extends Adapter {
                     timeout = null;
                     return this.sendTo(msg.from, msg.command, { error: null }, msg.callback);
                 }
-            } catch (err) {
+            } catch (error) {
                 if (timeout) {
                     clearTimeout(timeout);
                     timeout = null;
-                    return this.sendTo(msg.from, msg.command, { error: err ? err.toString() : null }, msg.callback);
+                    return this.sendTo(msg.from, msg.command, { error: extractError(error) }, msg.callback);
                 }
             }
-        } catch (ex) {
+            if (dockerCreated && this.dockerManager) {
+                try {
+                    await this.dockerManager.destroy();
+                    this.dockerManager = null;
+                } catch (e) {
+                    this.log.error(`Cannot stop docker container: ${extractError(e)}`);
+                }
+            }
+        } catch (error) {
             if (timeout) {
                 clearTimeout(timeout);
                 timeout = null;
             }
-            if (ex.toString() === 'TypeError: undefined is not a function') {
+            if (extractError(error) === 'TypeError: undefined is not a function') {
                 this.sendTo(
                     msg.from,
                     msg.command,
@@ -643,7 +598,7 @@ export class InfluxDBAdapter extends Adapter {
                 );
                 return;
             }
-            this.sendTo(msg.from, msg.command, { error: ex.toString() }, msg.callback);
+            this.sendTo(msg.from, msg.command, { error: extractError(error) }, msg.callback);
         }
     }
 
@@ -657,19 +612,19 @@ export class InfluxDBAdapter extends Adapter {
             this.sendTo(msg.from, msg.command, { error: null }, msg.callback);
             // restart adapter
             setTimeout(() => {
-                void this.getForeignObject(`system.this.${this.namespace}`, (err, obj) => {
-                    if (!err) {
+                void this.getForeignObject(`system.this.${this.namespace}`, (error, obj) => {
+                    if (!error) {
                         if (obj) {
                             void this.setForeignObject(obj._id, obj);
                         }
                     } else {
-                        this.log.error(`Cannot read object "system.this.${this.namespace}": ${err}`);
+                        this.log.error(`Cannot read object "system.this.${this.namespace}": ${error}`);
                         void this.stop?.();
                     }
                 });
             }, 2000);
-        } catch (err) {
-            this.sendTo(msg.from, msg.command, { error: err.toString() }, msg.callback);
+        } catch (error) {
+            this.sendTo(msg.from, msg.command, { error: extractError(error) }, msg.callback);
         }
     }
 
@@ -739,7 +694,7 @@ export class InfluxDBAdapter extends Adapter {
                     }
                 } catch (error) {
                     if (msg.callback) {
-                        this.sendTo(msg.from, msg.command, { error: error.toString() }, msg.callback);
+                        this.sendTo(msg.from, msg.command, { error: extractError(error) }, msg.callback);
                     }
                 }
             } else if (msg.command === 'enableHistory') {
@@ -759,9 +714,9 @@ export class InfluxDBAdapter extends Adapter {
                 await this.getRetention(msg);
             }
         } catch (error) {
-            this.log.error(`Cannot process message ${msg.command}: ${error}`);
+            this.log.error(`Cannot process message ${msg.command}: ${extractError(error)}`);
             if (msg.callback) {
-                this.sendTo(msg.from, msg.command, { error: error.toString() }, msg.callback);
+                this.sendTo(msg.from, msg.command, { error: extractError(error) }, msg.callback);
             }
         }
     }
@@ -787,9 +742,9 @@ export class InfluxDBAdapter extends Adapter {
         const obj = await this.getForeignObjectAsync('system.config');
         if (obj?.common && !obj.common.defaultHistory) {
             obj.common.defaultHistory = this.namespace;
-            this.setForeignObject('system.config', obj, err => {
-                if (err) {
-                    this.log.error(`Cannot set default history instance: ${err}`);
+            this.setForeignObject('system.config', obj, error => {
+                if (error) {
+                    this.log.error(`Cannot set default history instance: ${error}`);
                 } else {
                     this.log.info(`Set default history instance to "${this.namespace}"`);
                 }
@@ -864,98 +819,37 @@ export class InfluxDBAdapter extends Adapter {
         // read all custom settings
         const doc = await this.getObjectViewAsync('system', 'custom', {});
         let count = 0;
+
         if (doc?.rows) {
             const l = doc.rows.length;
             for (let i = 0; i < l; i++) {
                 if (doc.rows[i].value) {
-                    let id = doc.rows[i].id;
+                    const item: {
+                        id: string;
+                        value: {
+                            [key: `${string}.${number}`]: InfluxDbCustomConfigTyped;
+                        };
+                    } = doc.rows[i];
+                    let id = item.id;
                     const realId = id;
-                    if (doc.rows[i].value[this.namespace]?.aliasId) {
-                        this._aliasMap[id] = doc.rows[i].value[this.namespace].aliasId;
+                    if (!item.value[this.namespace]?.enabled) {
+                        continue;
+                    }
+                    if (item.value[this.namespace]?.aliasId) {
+                        this._aliasMap[id] = item.value[this.namespace].aliasId;
                         this.log.debug(`Found Alias: ${id} --> ${this._aliasMap[id]}`);
                         id = this._aliasMap[id];
                     }
-                    this._influxDPs[id] = doc.rows[i].value as SavedInfluxDbCustomConfig;
+                    this._influxDPs[id] = normalizeStateConfig(
+                        item.value[this.namespace],
+                        this.config,
+                    ) as SavedInfluxDbCustomConfig;
+                    this._influxDPs[id].config = JSON.stringify(item.value[this.namespace]);
+                    count++;
+                    this.log.info(`enabled logging of ${id}, Alias=${id !== realId}, ${count} points now activated`);
 
-                    if (
-                        !this._influxDPs[id].config ||
-                        typeof this._influxDPs[id].config !== 'object' ||
-                        this._influxDPs[id].config.enabled === false
-                    ) {
-                        delete this._influxDPs[id];
-                    } else {
-                        count++;
-                        this.log.info(
-                            `enabled logging of ${id}, Alias=${id !== realId}, ${count} points now activated`,
-                        );
-                        const storedConfig: InfluxDbCustomConfig = this._influxDPs[id].config;
-
-                        // debounceTime and debounce compatibility handling
-                        if (!storedConfig.blockTime && storedConfig.blockTime !== '0' && storedConfig.blockTime !== 0) {
-                            if (
-                                !storedConfig.debounce &&
-                                storedConfig.debounce !== '0' &&
-                                storedConfig.debounce !== 0
-                            ) {
-                                storedConfig.blockTime = this.config.blockTime || 0;
-                            } else {
-                                storedConfig.blockTime = parseInt(storedConfig.debounce as string, 10) || 0;
-                            }
-                        } else {
-                            storedConfig.blockTime = parseInt(storedConfig.blockTime as string, 10) || 0;
-                        }
-                        storedConfig.debounceTime = parseNumber(storedConfig.debounceTime, 0);
-                        storedConfig.changesOnly = parseBool(storedConfig.changesOnly);
-                        storedConfig.ignoreZero = parseBool(storedConfig.ignoreZero);
-
-                        // round
-                        if (
-                            storedConfig.round !== null &&
-                            storedConfig.round !== undefined &&
-                            storedConfig.round !== ''
-                        ) {
-                            storedConfig.round = parseInt(storedConfig.round as string, 10);
-                            if (!isFinite(storedConfig.round) || storedConfig.round < 0) {
-                                storedConfig.round = this.config.round;
-                            } else {
-                                storedConfig.round = Math.pow(
-                                    10,
-                                    parseInt(storedConfig.round as unknown as string, 10),
-                                );
-                            }
-                        } else {
-                            storedConfig.round = this.config.round;
-                        }
-
-                        // ignoreAboveNumber
-                        storedConfig.ignoreAboveNumber = parseNumberWithNull(storedConfig.ignoreAboveNumber);
-
-                        storedConfig.ignoreBelowNumber = parseNumberWithNull(storedConfig.ignoreBelowNumber);
-                        if (storedConfig.ignoreBelowNumber === null && parseBool(storedConfig.ignoreBelowZero)) {
-                            storedConfig.ignoreBelowNumber = 0;
-                        }
-                        storedConfig.disableSkippedValueLogging = parseBool(
-                            storedConfig.disableSkippedValueLogging,
-                            this.config.disableSkippedValueLogging,
-                        );
-                        storedConfig.enableDebugLogs = parseBool(
-                            storedConfig.enableDebugLogs,
-                            this.config.enableDebugLogs,
-                        );
-                        storedConfig.changesRelogInterval = parseNumber(
-                            storedConfig.changesRelogInterval,
-                            this.config.changesRelogInterval,
-                        );
-                        storedConfig.changesMinDelta = parseNumber(
-                            storedConfig.changesMinDelta,
-                            this.config.changesMinDelta,
-                        );
-
-                        storedConfig.storageType ||= false;
-
-                        this._influxDPs[id].realId = realId;
-                        await this.writeInitialValue(realId, id);
-                    }
+                    this._influxDPs[id].realId = realId;
+                    await this.writeInitialValue(realId, id);
                 }
             }
         }
@@ -975,84 +869,8 @@ export class InfluxDBAdapter extends Adapter {
         this.subscribeForeignObjects('*');
 
         if (this.config.useDocker) {
-            this.config.dbversion = '2.x';
-            this.config.dockerPort = parseInt(this.config.dockerPort as string, 10) || 8086;
-            this.config.protocol = 'http';
-            this.dockerFolder = join(getAbsoluteDefaultDataDir(), this.namespace);
-            // docker run -d -p 8086:8086 \
-            //   -v $PWD/data:/var/lib/influxdb2 \
-            //   -v $PWD/config:/etc/influxdb2 \
-            //   -e DOCKER_INFLUXDB_INIT_MODE=setup \
-            //   -e DOCKER_INFLUXDB_INIT_USERNAME=my-user \
-            //   -e DOCKER_INFLUXDB_INIT_PASSWORD=my-password \
-            //   -e DOCKER_INFLUXDB_INIT_ORG=my-org \
-            //   -e DOCKER_INFLUXDB_INIT_BUCKET=my-bucket \
-            //   influxdb:2
-            const influxDockerConfig: ContainerConfig = {
-                enabled: true,
-                // influxdb image: https://hub.docker.com/_/influxdb. Only version 2 is supported
-                image: 'influxdb:2',
-                name: `iobroker_${this.namespace}`,
-                ports: [
-                    {
-                        hostPort: this.config.dockerPort,
-                        containerPort: 8086,
-                        hostIP: '127.0.0.1', // only localhost to disable authentication and https safely
-                    },
-                ],
-                mounts: [
-                    {
-                        source: `${this.dockerFolder}/data`,
-                        target: '/var/lib/influxdb2',
-                        type: 'bind',
-                    },
-                    {
-                        source: `${this.dockerFolder}/config`,
-                        target: '/etc/influxdb2',
-                        type: 'bind',
-                    },
-                ],
-                // influxdb v2 requires some environment variables to be set on first start
-                environment: {
-                    DOCKER_INFLUXDB_INIT_USERNAME: 'iobroker',
-                    DOCKER_INFLUXDB_INIT_PASSWORD: 'iobroker',
-                    DOCKER_INFLUXDB_INIT_BUCKET: 'iobroker',
-                    DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: Buffer.from('iobroker86645638546565652656').toString('base64'),
-                },
-            };
-            // ensure that the folders exist
-            if (!existsSync(join(this.dockerFolder, 'data'))) {
-                mkdirSync(join(this.dockerFolder, 'data'));
-            }
-            if (!existsSync(join(this.dockerFolder, 'config'))) {
-                mkdirSync(join(this.dockerFolder, 'config'));
-                influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_MODE = 'setup';
-            } else {
-                // check if we have already a config file
-                if (existsSync(join(this.dockerFolder, 'config', 'config.yml'))) {
-                    // read the config file to get the token
-                    try {
-                        const fileContent = readFileSync(join(this.dockerFolder, 'config', 'config.yml'), 'utf-8');
-                        const lines = fileContent.split('\n');
-                        for (const line of lines) {
-                            if (line.startsWith('  token:')) {
-                                influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_ADMIN_TOKEN = line
-                                    .substring('  token:'.length)
-                                    .trim();
-                                this.log.info('Found existing InfluxDB token in config folder');
-                            }
-                        }
-                    } catch (err) {
-                        this.log.error(`Cannot read config file to get InfluxDB token: ${err}`);
-                    }
-                } else {
-                    influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_MODE = 'setup';
-                }
-            }
-            this.config.token = influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_ADMIN_TOKEN;
-
+            const influxDockerConfig: ContainerConfig = this.getDockerConfig(this.config);
             this.dockerManager = new DockerManager(this, [influxDockerConfig]);
-            await this.dockerManager.init();
         }
 
         void this.connect();
@@ -1064,6 +882,85 @@ export class InfluxDBAdapter extends Adapter {
                 void this.storeBufferedSeries();
             }, this.config.seriesBufferFlushInterval * 1000);
         }
+    }
+
+    getDockerConfig(config: InfluxDBAdapterConfig): ContainerConfig {
+        this.config.dbversion = '2.x';
+        this.config.dockerPort = parseInt(this.config.dockerPort as string, 10) || 8086;
+        this.config.protocol = 'http';
+        this.dockerFolder = join(getAbsoluteDefaultDataDir(), this.namespace);
+        // docker run -d -p 8086:8086 \
+        //   -v $PWD/data:/var/lib/influxdb2 \
+        //   -v $PWD/config:/etc/influxdb2 \
+        //   -e DOCKER_INFLUXDB_INIT_MODE=setup \
+        //   -e DOCKER_INFLUXDB_INIT_USERNAME=my-user \
+        //   -e DOCKER_INFLUXDB_INIT_PASSWORD=my-password \
+        //   -e DOCKER_INFLUXDB_INIT_ORG=my-org \
+        //   -e DOCKER_INFLUXDB_INIT_BUCKET=my-bucket \
+        //   influxdb:2
+        config.dbversion = '2.x';
+        config.dockerPort = parseInt(config.dockerPort as string, 10) || 8086;
+        config.protocol = 'http';
+        this.dockerFolder = join(getAbsoluteDefaultDataDir(), this.namespace);
+        // docker run -d -p 8086:8086 \
+        //   -v $PWD/data:/var/lib/influxdb2 \
+        //   -v $PWD/config:/etc/influxdb2 \
+        //   -e DOCKER_INFLUXDB_INIT_MODE=setup \
+        //   -e DOCKER_INFLUXDB_INIT_USERNAME=my-user \
+        //   -e DOCKER_INFLUXDB_INIT_PASSWORD=my-password \
+        //   -e DOCKER_INFLUXDB_INIT_ORG=my-org \
+        //   -e DOCKER_INFLUXDB_INIT_BUCKET=my-bucket \
+        //   influxdb:2
+        const influxDockerConfig: ContainerConfig = {
+            enabled: true,
+            // influxdb image: https://hub.docker.com/_/influxdb. Only version 2 is supported
+            image: 'influxdb:2',
+            name: `iobroker_${this.namespace}`,
+            ports: [
+                {
+                    hostPort: config.dockerPort,
+                    containerPort: 8086,
+                    hostIP: '127.0.0.1', // only localhost to disable authentication and https safely
+                },
+            ],
+            mounts: [
+                {
+                    source: `${this.dockerFolder}/data`,
+                    target: '/var/lib/influxdb2',
+                    type: 'bind',
+                },
+                {
+                    source: `${this.dockerFolder}/config`,
+                    target: '/etc/influxdb2',
+                    type: 'bind',
+                },
+            ],
+            // influxdb v2 requires some environment variables to be set on first start
+            environment: {
+                DOCKER_INFLUXDB_INIT_USERNAME: 'iobroker',
+                DOCKER_INFLUXDB_INIT_PASSWORD: 'iobroker',
+                DOCKER_INFLUXDB_INIT_BUCKET: 'iobroker',
+                DOCKER_INFLUXDB_INIT_ORG: 'iobroker',
+                DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: dockerDefaultToken,
+            },
+        };
+        // ensure that the folders exist
+        if (!existsSync(join(this.dockerFolder, 'data'))) {
+            mkdirSync(join(this.dockerFolder, 'data'), { recursive: true });
+        }
+        if (!existsSync(join(this.dockerFolder, 'config'))) {
+            mkdirSync(join(this.dockerFolder, 'config'), { recursive: true });
+            influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_MODE = 'setup';
+        } else {
+            // check if we have already a config file
+            if (!existsSync(join(this.dockerFolder, 'config', 'influx-configs'))) {
+                influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_MODE = 'setup';
+            }
+        }
+        config.token = influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_ADMIN_TOKEN;
+        config.organization = 'iobroker';
+
+        return influxDockerConfig;
     }
 
     async writeInitialValue(realId: string, id: string): Promise<void> {
@@ -1084,7 +981,7 @@ export class InfluxDBAdapter extends Adapter {
         timerRelog ||= false;
         // Push into InfluxDB
         if (this._influxDPs[id]) {
-            const settings = this._influxDPs[id].config;
+            const settings = this._influxDPs[id];
 
             if (!settings || !state) {
                 return;
@@ -1146,7 +1043,8 @@ export class InfluxDBAdapter extends Adapter {
                             `value ignore because zero or null ${id}, new-value=${state.val}, ts=${state.ts}`,
                         );
                     return;
-                } else if (
+                }
+                if (
                     typeof settings.ignoreBelowNumber === 'number' &&
                     typeof state.val === 'number' &&
                     state.val < settings.ignoreBelowNumber
@@ -1340,8 +1238,8 @@ export class InfluxDBAdapter extends Adapter {
                     this._influxDPs[_id].state = state;
                     await this.pushHistory(_id, this._influxDPs[_id].state, true);
                 }
-            } catch (err) {
-                this.log.info(`init timed Relog: can not get State for ${_id}: ${err}`);
+            } catch (error) {
+                this.log.info(`init timed Relog: can not get State for ${_id}: ${extractError(error)}`);
             }
         }
     }
@@ -1350,14 +1248,14 @@ export class InfluxDBAdapter extends Adapter {
         if (!state && !this._influxDPs[_id]?.state) {
             throw new Error(`No state to log for ID ${_id}`);
         }
-        state ||= this._influxDPs[_id].state;
+        state ||= this._influxDPs[_id]?.state;
 
         if (!state) {
             throw new Error(`No state to log for ID ${_id}`);
         }
 
         // Important: We allow also to store "unknown" states, so use fallback here
-        const _settings = (this._influxDPs[_id] && this._influxDPs[_id].config) || {};
+        const _settings = this._influxDPs[_id] || ({} as SavedInfluxDbCustomConfig);
 
         if (state.val === null) {
             // InfluxDB can not handle null values
@@ -1531,8 +1429,8 @@ export class InfluxDBAdapter extends Adapter {
         try {
             await this._client?.writeSeries(series);
             this.setConnected(true);
-        } catch (err) {
-            this.log.warn(`Error on writeSeries: ${err}`);
+        } catch (error) {
+            this.log.warn(`Error on writeSeries: ${extractError(error)}`);
             if (!this._client?.getHostsAvailable()) {
                 this.setConnected(false);
                 this.log.info('Host not available, move all points back in the Buffer');
@@ -1545,17 +1443,17 @@ export class InfluxDBAdapter extends Adapter {
                     }
                 });
                 this.reconnect();
-            } else if (
-                err.message &&
-                typeof err.message === 'string' &&
-                err.message.includes('partial write') &&
-                !err.message.includes('field type conflict')
-            ) {
-                this.log.warn('All possible data points were written, others can not really be corrected');
             } else {
-                this.log.info(`Try to write ${Object.keys(series).length} Points separate to find the conflicting id`);
-                // fallback and send data per id to find out problematic id!
-                await this.writeAllSeriesPerID(series);
+                const errorText = extractError(error);
+                if (errorText && errorText.includes('partial write') && !errorText.includes('field type conflict')) {
+                    this.log.warn('All possible data points were written, others can not really be corrected');
+                } else {
+                    this.log.info(
+                        `Try to write ${Object.keys(series).length} Points separate to find the conflicting id`,
+                    );
+                    // fallback and send data per id to find out problematic id!
+                    await this.writeAllSeriesPerID(series);
+                }
             }
         }
     }
@@ -1587,11 +1485,11 @@ export class InfluxDBAdapter extends Adapter {
             try {
                 await this._client?.writePoints(seriesId, pointsToSend);
                 this.setConnected(true);
-            } catch (err) {
-                this.log.warn(`Error on writePoints for ${seriesId}: ${err}`);
+            } catch (error) {
+                this.log.warn(`Error on writePoints for ${seriesId}: ${extractError(error)}`);
                 if (
                     !this._client?.getHostsAvailable() ||
-                    (err.message && (err.message === 'timeout' || err.message.includes('timed out')))
+                    (error.message && (error.message === 'timeout' || error.message.includes('timed out')))
                 ) {
                     this.log.info('Host not available, move all points back in the Buffer');
                     // error caused InfluxDB this._client to remove the host from available for now
@@ -1637,20 +1535,21 @@ export class InfluxDBAdapter extends Adapter {
         try {
             await this._client?.writePoint(pointId, point);
             this.setConnected(true);
-        } catch (err) {
-            this.log.warn(`Error on writePoint("${JSON.stringify(point)}): ${err} / ${JSON.stringify(err.message)}"`);
-            if (!this._client?.getHostsAvailable() || (err.message && err.message === 'timeout')) {
+        } catch (error) {
+            this.log.warn(`Error on writePoint("${JSON.stringify(point)}): ${extractError(error)}"`);
+            const errorText = extractError(error);
+            if (!this._client?.getHostsAvailable() || errorText.includes('timeout')) {
                 this.reconnect();
                 await this.addPointToSeriesBuffer(pointId, point);
-            } else if (err.message && typeof err.message === 'string' && err.message.includes('field type conflict')) {
+            } else if (errorText.includes('field type conflict')) {
                 // retry write after type correction for some easy cases
                 let retry = false;
                 let adjustType = false;
-                if (this._influxDPs[pointId]?.config && !this._influxDPs[pointId].config.storageType) {
+                if (this._influxDPs[pointId]?.config && !this._influxDPs[pointId].storageType) {
                     let convertDirection = '';
                     if (
-                        err.message.includes('is type bool, already exists as type float') ||
-                        err.message.includes('is type boolean, already exists as type float')
+                        errorText.includes('is type bool, already exists as type float') ||
+                        errorText.includes('is type boolean, already exists as type float')
                     ) {
                         convertDirection = 'bool -> float';
                         if (point.value === true) {
@@ -1661,11 +1560,11 @@ export class InfluxDBAdapter extends Adapter {
                             retry = true;
                         }
                         adjustType = true;
-                        this._influxDPs[pointId].config.storageType = 'Number';
+                        this._influxDPs[pointId].storageType = 'Number';
                         this._influxDPs[pointId].storageTypeAdjustedInternally = true;
                     } else if (
-                        err.message.includes('is type float, already exists as type bool') ||
-                        err.message.includes('is type float64, already exists as type bool')
+                        errorText.includes('is type float, already exists as type bool') ||
+                        errorText.includes('is type float64, already exists as type bool')
                     ) {
                         convertDirection = 'float -> bool';
                         if (point.value === 1) {
@@ -1676,26 +1575,26 @@ export class InfluxDBAdapter extends Adapter {
                             retry = true;
                         }
                         adjustType = true;
-                        this._influxDPs[pointId].config.storageType = 'Boolean';
+                        this._influxDPs[pointId].storageType = 'Boolean';
                         this._influxDPs[pointId].storageTypeAdjustedInternally = true;
-                    } else if (err.message.includes(', already exists as type string')) {
+                    } else if (errorText.includes(', already exists as type string')) {
                         point.value = point.value.toString();
                         retry = true;
                         adjustType = true;
-                        this._influxDPs[pointId].config.storageType = 'String';
+                        this._influxDPs[pointId].storageType = 'String';
                         this._influxDPs[pointId].storageTypeAdjustedInternally = true;
-                    } else if (err.message.includes('is type string, already exists as type float')) {
+                    } else if (errorText.includes('is type string, already exists as type float')) {
                         if (isFinite(point.value as unknown as number)) {
                             point.value = parseFloat(point.value as string);
                             retry = true;
                         }
                         adjustType = true;
-                        this._influxDPs[pointId].config.storageType = 'Number';
+                        this._influxDPs[pointId].storageType = 'Number';
                         this._influxDPs[pointId].storageTypeAdjustedInternally = true;
                     }
                     if (retry) {
                         this.log.info(
-                            `Try to convert ${convertDirection} and re-write for ${pointId} and set storageType to ${this._influxDPs[pointId].config.storageType}`,
+                            `Try to convert ${convertDirection} and re-write for ${pointId} and set storageType to ${this._influxDPs[pointId].storageType}`,
                         );
                         await this.writeOnePointForID(pointId, point, true);
                     }
@@ -1704,11 +1603,13 @@ export class InfluxDBAdapter extends Adapter {
                         obj.common = {} as ioBroker.StateCommon;
                         obj.common.custom = {};
                         obj.common.custom[this.namespace] = {};
-                        obj.common.custom[this.namespace].storageType = this._influxDPs[pointId].config.storageType;
+                        obj.common.custom[this.namespace].storageType = this._influxDPs[pointId].storageType;
 
-                        this.extendForeignObject(pointId, obj, err => {
-                            if (err) {
-                                this.log.error(`error updating history config for ${pointId} to pin datatype: ${err}`);
+                        this.extendForeignObject(pointId, obj, error => {
+                            if (error) {
+                                this.log.error(
+                                    `error updating history config for ${pointId} to pin datatype: ${error}`,
+                                );
                             } else {
                                 this.log.info(`changed history configuration to pin detected datatype for ${pointId}`);
                             }
@@ -1762,8 +1663,8 @@ export class InfluxDBAdapter extends Adapter {
                 this.log.warn(
                     `Store data for ${fileData.seriesBufferCounter} points and ${Object.keys(fileData.conflictingPoints).length} conflicts`,
                 );
-            } catch (err) {
-                this.log.warn(`Could not save non-stored data to file: ${err}`);
+            } catch (error) {
+                this.log.warn(`Could not save non-stored data to file: ${extractError(error)}`);
             }
         }
         this._seriesBufferCounter = 0;
@@ -1796,9 +1697,9 @@ export class InfluxDBAdapter extends Adapter {
             try {
                 await this._client?.query(query);
                 this.setConnected(true);
-            } catch (err) {
-                this.log.warn(`Error on delete("${query}): ${err} / ${JSON.stringify(err.message)}"`);
-                throw err;
+            } catch (error) {
+                this.log.warn(`Error on delete("${query}): ${extractError(error)}"`);
+                throw error;
             }
         } else if (this.config.dbversion === '2.x') {
             let start;
@@ -1835,9 +1736,9 @@ export class InfluxDBAdapter extends Adapter {
                 if (this._client) {
                     this.setConnected(true);
                 }
-            } catch (err) {
-                this.log.warn(`Error on delete("${err} / ${JSON.stringify(err.message)}"`);
-                throw err;
+            } catch (error) {
+                this.log.warn(`Error on delete("${extractError(error)}"`);
+                throw error;
             }
         } else {
             throw new Error('not implemented');
@@ -1956,7 +1857,7 @@ export class InfluxDBAdapter extends Adapter {
                     msg.command,
                     {
                         success: false,
-                        error,
+                        error: extractError(error),
                         connected: !!this._connected,
                     },
                     msg.callback,
@@ -1982,7 +1883,7 @@ export class InfluxDBAdapter extends Adapter {
                     msg.command,
                     {
                         success: false,
-                        error,
+                        error: extractError(error),
                         connected: !!this._connected,
                     },
                     msg.callback,
@@ -2041,7 +1942,7 @@ export class InfluxDBAdapter extends Adapter {
                     msg.command,
                     {
                         success: false,
-                        error,
+                        error: extractError(error),
                         connected: !!this._connected,
                     },
                     msg.callback,
@@ -2067,7 +1968,7 @@ export class InfluxDBAdapter extends Adapter {
                     msg.command,
                     {
                         success: false,
-                        error,
+                        error: extractError(error),
                         connected: !!this._connected,
                     },
                     msg.callback,
@@ -2133,9 +2034,9 @@ export class InfluxDBAdapter extends Adapter {
                     this.log.error(`Cannot find value to delete for ${id}: ${JSON.stringify(state)}`);
                     throw new Error('not found');
                 }
-            } catch (err) {
-                this.log.warn(`Error on update("${query}): ${err} / ${JSON.stringify(err.message)}"`);
-                throw err;
+            } catch (error) {
+                this.log.warn(`Error on update("${query}): ${error} / ${JSON.stringify(error.message)}"`);
+                throw error;
             }
         } else if (this.config.dbversion === '2.x') {
             let fluxQuery = `from(bucket: "${this.config.dbname}") `;
@@ -2190,9 +2091,9 @@ export class InfluxDBAdapter extends Adapter {
                     this.log.error(`Cannot find value to delete for ${id}: ${JSON.stringify(state)}`);
                     throw new Error('not found');
                 }
-            } catch (err) {
-                this.log.warn(`Error on update("${fluxQuery}): ${err} / ${JSON.stringify(err.message)}"`);
-                throw err;
+            } catch (error) {
+                this.log.warn(`Error on update("${fluxQuery}): ${error} / ${JSON.stringify(error.message)}"`);
+                throw error;
             }
         } else {
             throw new Error('not implemented');
@@ -2232,7 +2133,7 @@ export class InfluxDBAdapter extends Adapter {
                     msg.command,
                     {
                         success: false,
-                        error,
+                        error: extractError(error),
                         connected: !!this._connected,
                     },
                     msg.callback,
@@ -2256,7 +2157,7 @@ export class InfluxDBAdapter extends Adapter {
                     msg.command,
                     {
                         success: false,
-                        error,
+                        error: extractError(error),
                         connected: !!this._connected,
                     },
                     msg.callback,
@@ -2274,7 +2175,7 @@ export class InfluxDBAdapter extends Adapter {
                     msg.command,
                     {
                         success: !error,
-                        error,
+                        error: extractError(error),
                         connected: !!this._connected,
                     },
                     msg.callback,
@@ -2315,8 +2216,8 @@ export class InfluxDBAdapter extends Adapter {
             } else {
                 await this.pushHelper(id, state);
             }
-        } catch (err) {
-            throw new Error(`Error writing state for ${id}: ${err.message}, Data: ${JSON.stringify(state)}`);
+        } catch (error) {
+            throw new Error(`Error writing state for ${id}: ${extractError(error)}, Data: ${JSON.stringify(state)}`);
         }
     }
 
@@ -2343,8 +2244,8 @@ export class InfluxDBAdapter extends Adapter {
                 try {
                     await this.storeStatePushData(id, msg.message[i].state, msg.message[i].rules);
                     successCount++;
-                } catch (err) {
-                    errors.push(err.message);
+                } catch (error) {
+                    errors.push(extractError(error));
                 }
             }
         } else if (msg.message.id && Array.isArray(msg.message.state)) {
@@ -2354,8 +2255,8 @@ export class InfluxDBAdapter extends Adapter {
                 try {
                     await this.storeStatePushData(id, msg.message.state[j], msg.message.rules);
                     successCount++;
-                } catch (err) {
-                    errors.push(err.message);
+                } catch (error) {
+                    errors.push(extractError(error));
                 }
             }
         } else if (msg.message.id && msg.message.state) {
@@ -2364,8 +2265,8 @@ export class InfluxDBAdapter extends Adapter {
             try {
                 await this.storeStatePushData(id, msg.message.state, msg.message.rules);
                 successCount++;
-            } catch (err) {
-                errors.push(err.message);
+            } catch (error) {
+                errors.push(extractError(error));
             }
         } else {
             this.log.error('storeState called with invalid data');
@@ -2385,7 +2286,7 @@ export class InfluxDBAdapter extends Adapter {
                 msg.command,
                 {
                     error: `${errors.length} errors happened while storing data`,
-                    errors: errors,
+                    errors,
                     successCount,
                 },
                 msg.callback,
@@ -2453,7 +2354,7 @@ export class InfluxDBAdapter extends Adapter {
 
             if (
                 this._influxDPs[id].skipped &&
-                !(this._influxDPs[id].config && this._influxDPs[id].config.disableSkippedValueLogging)
+                !(this._influxDPs[id].config && this._influxDPs[id].disableSkippedValueLogging)
             ) {
                 await this.pushHelper(id, this._influxDPs[id].skipped);
                 this._influxDPs[id].skipped = null;
@@ -2585,7 +2486,7 @@ export class InfluxDBAdapter extends Adapter {
         }
 
         this._influxDPs[id] = this._influxDPs[id] || {};
-        const debugLog = !!this._influxDPs[id]?.config?.enableDebugLogs || this.config.enableDebugLogs;
+        const debugLog = !!this._influxDPs[id]?.enableDebugLogs || this.config.enableDebugLogs;
 
         if (id && this._aliasMap[id]) {
             id = this._aliasMap[id];
@@ -2834,20 +2735,20 @@ export class InfluxDBAdapter extends Adapter {
                         if (this._client.getHostsAvailable() === 0) {
                             this.setConnected(false);
                         }
-                        this.log.error(`getHistory: ${error}`);
+                        this.log.error(`getHistory: ${extractError(error)}`);
                         Aggregate.sendResponse(
                             this as unknown as ioBroker.Adapter,
                             msg,
                             options,
-                            error.toString(),
+                            extractError(error),
                             startTime,
                         );
                     }
                 },
                 storedCount ? 50 : 0,
             );
-        } catch (err) {
-            this.log.info(`Error storing buffered series for ${id} before GetHistory: ${err}`);
+        } catch (error) {
+            this.log.info(`Error storing buffered series for ${id} before GetHistory: ${extractError(error)}`);
         }
     }
 
@@ -2961,7 +2862,7 @@ export class InfluxDBAdapter extends Adapter {
         }
 
         this._influxDPs[id] = this._influxDPs[id] || {};
-        const debugLog = !!this._influxDPs[id]?.config?.enableDebugLogs || this.config.enableDebugLogs;
+        const debugLog = !!this._influxDPs[id]?.enableDebugLogs || this.config.enableDebugLogs;
 
         if (id && this._aliasMap[id]) {
             id = this._aliasMap[id];
@@ -3040,10 +2941,7 @@ export class InfluxDBAdapter extends Adapter {
                         if (!this._influxDPs[id]) {
                             return;
                         }
-                        if (
-                            this._influxDPs[id]?.config?.storageType &&
-                            this._influxDPs[id].config.storageType !== 'Number'
-                        ) {
+                        if (this._influxDPs[id]?.storageType && this._influxDPs[id].storageType !== 'Number') {
                             supportsAggregates = false;
                         } else {
                             if (debugLog) {
@@ -3052,9 +2950,9 @@ export class InfluxDBAdapter extends Adapter {
                             supportsAggregates = !!result?.find(r => r.error?.includes('type conflict: bool'));
                         }
                     } catch (error) {
-                        if (error.message.includes('type conflict: bool')) {
+                        if (extractError(error).includes('type conflict: bool')) {
                             if (debugLog) {
-                                this.log.debug(`${logId} Bool check error: ${error.message}`);
+                                this.log.debug(`${logId} Bool check error: ${extractError(error)}`);
                             }
                             supportsAggregates = true;
                         } else {
@@ -3064,7 +2962,7 @@ export class InfluxDBAdapter extends Adapter {
                                 msg.command,
                                 {
                                     result: [],
-                                    error,
+                                    error: extractError(error),
                                     sessionId: options.sessionId,
                                 },
                                 msg.callback,
@@ -3281,17 +3179,17 @@ export class InfluxDBAdapter extends Adapter {
                                 startTime,
                             );
                         }
-                    } catch (err) {
+                    } catch (error) {
                         if (!this._client?.getHostsAvailable()) {
                             this.setConnected(false);
                         }
-                        this.log.error(`getHistory: ${err}`);
+                        this.log.error(`getHistory: ${extractError(error)}`);
                     }
                 },
                 storedCount ? 50 : 0,
             );
-        } catch (err) {
-            this.log.info(`Error storing buffered series for ${id} before GetHistory: ${err}`);
+        } catch (error) {
+            this.log.info(`Error storing buffered series for ${id} before GetHistory: ${extractError(error)}`);
         }
     }
 
@@ -3360,17 +3258,17 @@ export class InfluxDBAdapter extends Adapter {
                     },
                     msg.callback,
                 );
-            } catch (err) {
+            } catch (error) {
                 if (!this._client.getHostsAvailable()) {
                     this.setConnected(false);
                 }
-                this.log.error(`query: ${err}`);
+                this.log.error(`query: ${extractError(error)}`);
                 this.sendTo(
                     msg.from,
                     msg.command,
                     {
                         result: [],
-                        error: err.toString(),
+                        error: extractError(error),
                     },
                     msg.callback,
                 );
@@ -3403,13 +3301,13 @@ export class InfluxDBAdapter extends Adapter {
                     }
                 }
             } catch (error) {
-                this.log.warn(`Error in received multiQuery: ${error}`);
+                this.log.warn(`Error in received multiQuery: ${extractError(error)}`);
                 this.sendTo(
                     msg.from,
                     msg.command,
                     {
                         result: [],
-                        error: error,
+                        error: extractError(error),
                     },
                     msg.callback,
                 );
@@ -3470,18 +3368,18 @@ export class InfluxDBAdapter extends Adapter {
                     },
                     msg.callback,
                 );
-            } catch (err) {
-                if (err) {
+            } catch (error) {
+                if (error) {
                     if (!this._client?.getHostsAvailable()) {
                         this.setConnected(false);
                     }
-                    this.log.error(`queries: ${err}`);
+                    this.log.error(`queries: ${extractError(error)}`);
                     return this.sendTo(
                         msg.from,
                         msg.command,
                         {
                             result: [],
-                            error: err.toString(),
+                            error: extractError(error),
                         },
                         msg.callback,
                     );
@@ -3551,8 +3449,8 @@ export class InfluxDBAdapter extends Adapter {
     getEnabledDPs(msg: ioBroker.Message): void {
         const data: { [id: string]: InfluxDbCustomConfigTyped } = {};
         for (const id in this._influxDPs) {
-            if (Object.prototype.hasOwnProperty.call(this._influxDPs, id) && this._influxDPs[id]?.config?.enabled) {
-                data[this._influxDPs[id].realId] = this._influxDPs[id].config;
+            if (Object.prototype.hasOwnProperty.call(this._influxDPs, id) && this._influxDPs[id]?.enabled) {
+                data[this._influxDPs[id].realId] = JSON.parse(this._influxDPs[id].config);
             }
         }
 

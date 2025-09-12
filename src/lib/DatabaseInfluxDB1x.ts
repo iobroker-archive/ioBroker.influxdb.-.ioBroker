@@ -1,10 +1,10 @@
-import Influx, { type IPoint } from 'influx';
+import { InfluxDB, type IPoint } from 'influx';
 import { Database, type ValuesForInflux } from './Database';
 
 export default class DatabaseInfluxDB1x extends Database {
     private readonly username: string;
     private readonly password: string;
-    private connection: Influx.InfluxDB | null = null;
+    private connection: InfluxDB | null = null;
 
     constructor(
         options: {
@@ -31,7 +31,7 @@ export default class DatabaseInfluxDB1x extends Database {
     connect(): void {
         this.log.debug(`Connect InfluxDB1: ${this.protocol}://${this.host}:${this.port} [${this.database}]`);
 
-        this.connection = new Influx.InfluxDB({
+        this.connection = new InfluxDB({
             host: this.host,
             port: parseInt(this.port as string, 10) || undefined, // optional, default 8086
             protocol: this.protocol, // optional, default 'http'

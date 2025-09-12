@@ -1,21 +1,21 @@
 import { Database, type ValuesForInflux } from './Database';
-import InfluxClient from '@influxdata/influxdb-client';
-import InfluxClientApis from '@influxdata/influxdb-client-apis';
+import { InfluxDB, type QueryApi, type WriteApi, Point } from '@influxdata/influxdb-client';
+import { BucketsAPI, OrgsAPI, HealthAPI, DeleteAPI } from '@influxdata/influxdb-client-apis';
 
 // Influx 2.x auth requires token, not user/pw
 export default class DatabaseInfluxDB2x extends Database {
-    private connection!: InfluxClient.InfluxDB;
+    private connection!: InfluxDB;
     private readonly path: string;
     private readonly token: string;
     private readonly organization: string;
     private readonly useTags: boolean;
     private readonly validateSSL: boolean;
-    private queryApi!: InfluxClient.QueryApi;
-    private writeApi!: InfluxClient.WriteApi;
-    private bucketsApi!: InfluxClientApis.BucketsAPI;
-    private orgsApi!: InfluxClientApis.OrgsAPI;
-    private healthApi!: InfluxClientApis.HealthAPI;
-    private deleteApi!: InfluxClientApis.DeleteAPI;
+    private queryApi!: QueryApi;
+    private writeApi!: WriteApi;
+    private bucketsApi!: BucketsAPI;
+    private orgsApi!: OrgsAPI;
+    private healthApi!: HealthAPI;
+    private deleteApi!: DeleteAPI;
     private organizationId: string = '';
     private bucketIds: { [buckedId: string]: string } = {};
 
@@ -52,7 +52,7 @@ export default class DatabaseInfluxDB2x extends Database {
 
         this.log.debug(`Connect InfluxDB2: ${url} [${this.database}]`);
 
-        this.connection = new InfluxClient.InfluxDB({
+        this.connection = new InfluxDB({
             url,
             token: this.token,
             timeout: this.requestTimeout,
@@ -61,10 +61,10 @@ export default class DatabaseInfluxDB2x extends Database {
 
         this.queryApi = this.connection.getQueryApi(this.organization);
         this.writeApi = this.connection.getWriteApi(this.organization, this.database, this.timePrecision);
-        this.bucketsApi = new InfluxClientApis.BucketsAPI(this.connection);
-        this.orgsApi = new InfluxClientApis.OrgsAPI(this.connection);
-        this.healthApi = new InfluxClientApis.HealthAPI(this.connection);
-        this.deleteApi = new InfluxClientApis.DeleteAPI(this.connection);
+        this.bucketsApi = new BucketsAPI(this.connection);
+        this.orgsApi = new OrgsAPI(this.connection);
+        this.healthApi = new HealthAPI(this.connection);
+        this.deleteApi = new DeleteAPI(this.connection);
     }
 
     getHostsAvailable(): number {
@@ -170,7 +170,7 @@ export default class DatabaseInfluxDB2x extends Database {
     async writeSeries(series: { [id: string]: ValuesForInflux[] }): Promise<void> {
         this.log.debug(`Write series: ${JSON.stringify(series)}`);
 
-        const points: InfluxClient.Point[] = [];
+        const points: Point[] = [];
         for (const [pointId, valueSets] of Object.entries(series)) {
             valueSets.forEach(value => {
                 points.push(this.stateValueToPoint(pointId, value));
@@ -185,7 +185,7 @@ export default class DatabaseInfluxDB2x extends Database {
     async writePoints(seriesId: string, pointsToSend: ValuesForInflux[]): Promise<void> {
         this.log.debug(`Write Points: ${seriesId} pointsToSend:${JSON.stringify(pointsToSend)}`);
 
-        const points: InfluxClient.Point[] = [];
+        const points: Point[] = [];
         pointsToSend.forEach(value => {
             points.push(this.stateValueToPoint(seriesId, value));
         });
@@ -202,17 +202,17 @@ export default class DatabaseInfluxDB2x extends Database {
         this.log.debug(`Point written to ${this.database}`);
     }
 
-    stateValueToPoint(pointName: string, stateValue: ValuesForInflux): InfluxClient.Point {
+    stateValueToPoint(pointName: string, stateValue: ValuesForInflux): Point {
         let point = null;
 
         if (this.useTags) {
-            point = new InfluxClient.Point(pointName)
+            point = new Point(pointName)
                 .timestamp(stateValue.time)
                 .tag('q', String(stateValue.q))
                 .tag('ack', String(stateValue.ack))
                 .tag('from', stateValue.from);
         } else {
-            point = new InfluxClient.Point(pointName)
+            point = new Point(pointName)
                 .timestamp(stateValue.time)
                 .floatField('q', stateValue.q)
                 .booleanField('ack', stateValue.ack)

@@ -105,6 +105,12 @@ Enable authentication by editing /etc/influxdb/influxdb.conf:
 ```
 - Restart service: ``` service influxdb restart ```
 
+## Self-hosted docker image for InfluxDB
+This version of the adapter could start a self-hosted docker image of InfluxDB 2.x.
+It is not opened for the network and only accessible from localhost. Of course, the docker environment must be installed and running on the host.
+
+The `iobroker` user must have access to the docker CLI. To fix the rights start `iob fix`.
+
 ## Installation of Grafana (Charting Tool)
 There is an additional charting tool for InfluxDB - Grafana.
 It must be installed additionally.
