@@ -378,7 +378,7 @@ If you want to flush the buffers for one or all data points to the Database, you
 sendTo('influxdb.0', 'flushBuffer', {id: 'mbus.0.counter.xxx'
 , result => console.log('deleted, error: ' + result.error));
 ```
-if no id is provided all buffers will be flushed.
+if no id is provided, all buffers will be flushed.
 
 ## History Logging Management via Javascript
 The adapter supports enabling and disabling of history logging via JavaScript and also retrieving the list of enabled data points with their settings.
@@ -707,7 +707,7 @@ sendTo('influxdb.0', 'getEnabledDPs', {}, function (result) {
 
 The MIT License (MIT)
 
-Copyright (c) 2015-2024 bluefox, apollon77
+Copyright (c) 2015-2025 bluefox, apollon77
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
