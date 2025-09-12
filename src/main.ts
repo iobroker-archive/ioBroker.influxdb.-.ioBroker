@@ -1,9 +1,10 @@
-import utils, { Adapter, type AdapterOptions } from '@iobroker/adapter-core'; // Get common adapter utils
+import { statSync, readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import utils, { Adapter, type AdapterOptions, getAbsoluteDefaultDataDir } from '@iobroker/adapter-core'; // Get common adapter utils
+
 import DatabaseInfluxDB1x from './lib/DatabaseInfluxDB1x';
 import DatabaseInfluxDB2x from './lib/DatabaseInfluxDB2x';
 import type { Database, ValuesForInflux } from './lib/Database';
-import fs from 'node:fs';
-import path from 'node:path';
 import * as Aggregate from './lib/aggregate';
 import type {
     GetHistoryOptions,
@@ -12,8 +13,10 @@ import type {
     InfluxDbCustomConfigTyped,
     IobDataEntry,
 } from './types';
+import DockerManager from './lib/DockerManager';
+import type { ContainerConfig } from './lib/dockerManager.types';
 const dataDir = utils.getAbsoluteDefaultDataDir();
-let cacheFile = path.join(dataDir, 'influxdata.json');
+let cacheFile = join(dataDir, 'influxdata.json');
 
 function isObject(it: any): boolean {
     // This is necessary because:
@@ -135,6 +138,8 @@ export class InfluxDBAdapter extends Adapter {
     private _finished = false;
     // mapping from ioBroker ID to Alias ID
     private readonly _aliasMap: { [ioBrokerId: string]: string } = {};
+    private dockerFolder: string | null = null;
+    private dockerManager: DockerManager | null = null;
 
     public constructor(options: Partial<AdapterOptions> = {}) {
         super({
@@ -521,7 +526,7 @@ export class InfluxDBAdapter extends Adapter {
                         `that already uses ${this.config.usetags ? 'tags' : 'fields'}, or is empty.`,
                 );
                 this.setConnected(false);
-                await this.finish(null);
+                await this.finish();
             } else {
                 this.setConnected(true);
                 await this.processStartValues();
@@ -834,8 +839,8 @@ export class InfluxDBAdapter extends Adapter {
         }
         // analyse if by the last stop the values were cached into file
         try {
-            if (fs.statSync(cacheFile).isFile()) {
-                const fileContent = fs.readFileSync(cacheFile, 'utf-8');
+            if (statSync(cacheFile).isFile()) {
+                const fileContent = readFileSync(cacheFile, 'utf-8');
                 const tempData = JSON.parse(fileContent, (key, value) => (key === 'time' ? new Date(value) : value));
 
                 if (tempData.seriesBufferCounter) {
@@ -850,7 +855,7 @@ export class InfluxDBAdapter extends Adapter {
                 this.log.info(
                     `Buffer initialized with data for ${this._seriesBufferCounter} points and ${Object.keys(this._conflictingPoints).length} conflicts from last exit`,
                 );
-                fs.unlinkSync(cacheFile);
+                unlinkSync(cacheFile);
             }
         } catch {
             this.log.info('No stored data from last exit found');
@@ -968,6 +973,87 @@ export class InfluxDBAdapter extends Adapter {
         }
 
         this.subscribeForeignObjects('*');
+
+        if (this.config.useDocker) {
+            this.config.dbversion = '2.x';
+            this.config.dockerPort = parseInt(this.config.dockerPort as string, 10) || 8086;
+            this.config.protocol = 'http';
+            this.dockerFolder = join(getAbsoluteDefaultDataDir(), this.namespace);
+            // docker run -d -p 8086:8086 \
+            //   -v $PWD/data:/var/lib/influxdb2 \
+            //   -v $PWD/config:/etc/influxdb2 \
+            //   -e DOCKER_INFLUXDB_INIT_MODE=setup \
+            //   -e DOCKER_INFLUXDB_INIT_USERNAME=my-user \
+            //   -e DOCKER_INFLUXDB_INIT_PASSWORD=my-password \
+            //   -e DOCKER_INFLUXDB_INIT_ORG=my-org \
+            //   -e DOCKER_INFLUXDB_INIT_BUCKET=my-bucket \
+            //   influxdb:2
+            const influxDockerConfig: ContainerConfig = {
+                enabled: true,
+                // influxdb image: https://hub.docker.com/_/influxdb. Only version 2 is supported
+                image: 'influxdb:2',
+                name: `iobroker_${this.namespace}`,
+                ports: [
+                    {
+                        hostPort: this.config.dockerPort,
+                        containerPort: 8086,
+                        hostIP: '127.0.0.1', // only localhost to disable authentication and https safely
+                    },
+                ],
+                mounts: [
+                    {
+                        source: `${this.dockerFolder}/data`,
+                        target: '/var/lib/influxdb2',
+                        type: 'bind',
+                    },
+                    {
+                        source: `${this.dockerFolder}/config`,
+                        target: '/etc/influxdb2',
+                        type: 'bind',
+                    },
+                ],
+                // influxdb v2 requires some environment variables to be set on first start
+                environment: {
+                    DOCKER_INFLUXDB_INIT_USERNAME: 'iobroker',
+                    DOCKER_INFLUXDB_INIT_PASSWORD: 'iobroker',
+                    DOCKER_INFLUXDB_INIT_BUCKET: 'iobroker',
+                    DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: Buffer.from('iobroker86645638546565652656').toString('base64'),
+                },
+            };
+            // ensure that the folders exist
+            if (!existsSync(join(this.dockerFolder, 'data'))) {
+                mkdirSync(join(this.dockerFolder, 'data'));
+            }
+            if (!existsSync(join(this.dockerFolder, 'config'))) {
+                mkdirSync(join(this.dockerFolder, 'config'));
+                influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_MODE = 'setup';
+            } else {
+                // check if we have already a config file
+                if (existsSync(join(this.dockerFolder, 'config', 'config.yml'))) {
+                    // read the config file to get the token
+                    try {
+                        const fileContent = readFileSync(join(this.dockerFolder, 'config', 'config.yml'), 'utf-8');
+                        const lines = fileContent.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('  token:')) {
+                                influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_ADMIN_TOKEN = line
+                                    .substring('  token:'.length)
+                                    .trim();
+                                this.log.info('Found existing InfluxDB token in config folder');
+                            }
+                        }
+                    } catch (err) {
+                        this.log.error(`Cannot read config file to get InfluxDB token: ${err}`);
+                    }
+                } else {
+                    influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_MODE = 'setup';
+                }
+            }
+            this.config.token = influxDockerConfig.environment!.DOCKER_INFLUXDB_INIT_ADMIN_TOKEN;
+
+            this.dockerManager = new DockerManager(this, [influxDockerConfig]);
+            await this.dockerManager.init();
+        }
 
         void this.connect();
 
@@ -1672,7 +1758,7 @@ export class InfluxDBAdapter extends Adapter {
             };
 
             try {
-                fs.writeFileSync(cacheFile, JSON.stringify(fileData), 'utf-8');
+                writeFileSync(cacheFile, JSON.stringify(fileData), 'utf-8');
                 this.log.warn(
                     `Store data for ${fileData.seriesBufferCounter} points and ${Object.keys(fileData.conflictingPoints).length} conflicts`,
                 );
@@ -2321,7 +2407,7 @@ export class InfluxDBAdapter extends Adapter {
         );
     }
 
-    async finish(callback: (() => void) | null): Promise<void> {
+    async finish(callback?: () => void): Promise<void> {
         void this.setState?.('info.connection', false, true);
 
         if (!this._subscribeAll) {
@@ -2375,6 +2461,10 @@ export class InfluxDBAdapter extends Adapter {
         }
 
         this.writeFileBufferToDisk();
+
+        // stop docker if started
+        await this.dockerManager?.destroy();
+
         if (callback) {
             callback();
         } else {

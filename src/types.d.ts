@@ -174,6 +174,9 @@ export interface InfluxDBAdapterConfig {
     relogLastValueOnStart: boolean | 'true' | 'false';
     enableDebugLogs: boolean;
     limit: number | string;
+    useDocker: boolean;
+    stopDockerIfInstanceStopped: boolean;
+    dockerPort: number | string;
 }
 
 export interface InfluxDbCustomConfig {
@@ -200,8 +203,8 @@ export interface InfluxDbCustomConfigTyped {
     changesOnly: boolean;
     changesRelogInterval: number;
     changesMinDelta: number;
-    ignoreBelowNumber: number| null;
-    ignoreAboveNumber: number| null;
+    ignoreBelowNumber: number | null;
+    ignoreAboveNumber: number | null;
     ignoreZero: boolean;
     disableSkippedValueLogging: boolean;
     storageType: 'Number' | 'String' | 'Boolean' | false;
