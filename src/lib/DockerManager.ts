@@ -452,16 +452,14 @@ export default class DockerManager {
         timeoutSeconds?: number,
     ): Promise<{ stdout: string; stderr: string }> {
         try {
-            let containers = await this.containerList();
+            const containers = await this.containerList();
             // find ID of container
             const containerInfo = containers.find(it => it.names === container || it.id === container);
             if (!containerInfo) {
                 throw new Error(`Container ${container} not found`);
             }
 
-            const result = await this.#exec(`restart -t ${timeoutSeconds || 5} ${containerInfo.id}`);
-            containers = await this.containerList();
-            return result;
+            return await this.#exec(`restart -t ${timeoutSeconds || 5} ${containerInfo.id}`);
         } catch (e) {
             return { stdout: '', stderr: e.message.toString() };
         }
