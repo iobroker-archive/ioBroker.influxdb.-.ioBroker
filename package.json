@@ -40,7 +40,7 @@
     "bugs": {
         "url": "https://github.com/ioBroker/ioBroker.influxdb/issues"
     },
-    "main": "main.js",
+    "main": "build/main.js",
     "files": [
         "admin/",
         "docs/",
