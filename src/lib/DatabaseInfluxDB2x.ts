@@ -162,7 +162,7 @@ export default class DatabaseInfluxDB2x extends Database {
     }
 
     async dropDatabase(dbname: string): Promise<void> {
-        this.log.info(`Dropping database ${dbname} for orgId ${this.organizationId}`);
+        this.log.info(`Dropping database ${dbname} for orgId "${this.organizationId}"`);
         await this.bucketsApi.deleteBucketsID({ bucketID: this.bucketIds[dbname] });
     }
 

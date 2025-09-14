@@ -67,9 +67,12 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
             config.common.loglevel = 'debug';
 
             if (process.env.INFLUXDB2) {
-                const authToken = JSON.parse(process.env.AUTHTOKEN).token;
-                console.log(`AUTHTOKEN=${process.env.AUTHTOKEN}`);
-                console.log(`extracted token =${authToken}`);
+                let authToken;
+                if (process.env.AUTHTOKEN) {
+                    authToken = JSON.parse(process.env.AUTHTOKEN).token;
+                    console.log(`AUTHTOKEN=${process.env.AUTHTOKEN}`);
+                    console.log(`extracted token =${authToken}`);
+                }
                 config.native.dbversion = '2.x';
 
                 let secret = await setup.getSecret();
@@ -77,8 +80,9 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
                     secret = 'Zgfr56gFe87jJOM';
                 }
 
-                config.native.token = setup.encrypt(secret, 'test-token'); //authToken;
-                config.native.organization = 'test-org';
+                console.log(`############SECRET: ${secret}`);
+                config.native.token = setup.encrypt(secret, process.env.INFLUXDB2_TOKEN || 'test-token'); //authToken;
+                config.native.organization = process.env.INFLUXDB2_ORG || 'test-org';
             } else if (process.env.INFLUX_DB1_HOST) {
                 config.native.host = process.env.INFLUX_DB1_HOST;
             }

@@ -782,7 +782,7 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
         });
         expect(result.success).to.be.true;
 
-        await setStateAsync(1000);
+        await setTimeoutAsync(1000);
         // BF: The tests are very strange, as integral must be equal between all implementations and versions of InfluxDB
         let integral = calculateIntegralUnit(nowSampleI1, nowSampleI1 + 30 * 60_000, states, 1);
         result = await sendToAsync(instanceName, 'getHistory', {
@@ -848,18 +848,13 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
                 expect(result.result[0].val).to.be.equal(62.25);
             }
         } else {
-            if (assumeExistingData) {
-                expect(result.result.length).to.be.equal(3);
-                //expect(result.result[1].val).to.be.within(40, 65);
-            } else {
-                expect(result.result.length).to.be.within(1, 2);
-                const sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+            expect(result.result.length).to.be.within(1, 2);
+            const sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
 
-                if (process.env.INFLUXDB2) {
-                    expect(parseFloat(sum.toFixed(2))).to.be.within(49, 50);
-                } else {
-                    expect(parseFloat(sum.toFixed(2))).to.be.equal(62.21);
-                }
+            if (process.env.INFLUXDB2) {
+                expect(parseFloat(sum.toFixed(2))).to.be.within(49, 50);
+            } else {
+                expect(parseFloat(sum.toFixed(2))).to.be.equal(62.21);
             }
         }
         // Result Influxdb1 Doku = 62.211

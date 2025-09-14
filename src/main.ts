@@ -178,10 +178,12 @@ export class InfluxDBAdapter extends Adapter {
             ready: () => this.main(),
             message: (obj: ioBroker.Message) => this.processMessage(obj),
             stateChange: (id: string, state: ioBroker.State | null | undefined): void => {
+                this.config.dbname ||= 'iobroker';
                 id = this._aliasMap[id] ? this._aliasMap[id] : id;
                 void this.pushHistory(id, state);
             },
             objectChange: (id: string, obj: ioBroker.Object | null | undefined): void => {
+                this.config.dbname ||= 'iobroker';
                 const formerAliasId = this._aliasMap[id] ? this._aliasMap[id] : id;
                 if (
                     obj?.common?.custom?.[this.namespace] &&
@@ -349,7 +351,6 @@ export class InfluxDBAdapter extends Adapter {
             `Connecting ${this.config.protocol}://${this.config.host}:${this.config.port}/${this.config.dbversion === '2.x' ? this.config.path || '' : ''} ...`,
         );
 
-        this.config.dbname = this.config.dbname || 'iobroker';
         this.config.validateSSL = this.config.validateSSL !== undefined ? !!this.config.validateSSL : true;
 
         this.config.seriesBufferMax = parseInt(this.config.seriesBufferMax as string, 10) || 0;
@@ -369,7 +370,7 @@ export class InfluxDBAdapter extends Adapter {
                         host: this.config.host,
                         port: this.config.port,
                         protocol: this.config.protocol, // optional, default 'http'
-                        database: this.config.dbname || 'iobroker',
+                        database: this.config.dbname,
                         requestTimeout: this.config.requestTimeout as number,
                     },
                     {
@@ -518,6 +519,7 @@ export class InfluxDBAdapter extends Adapter {
                     this.dockerManager = new DockerManager(this, [influxDockerConfig]);
                 }
             }
+            config.dbname ||= 'iobroker';
 
             switch (config.dbversion) {
                 case '2.x':
@@ -528,7 +530,7 @@ export class InfluxDBAdapter extends Adapter {
                             host: config.host,
                             port: config.port,
                             protocol: config.protocol, // optional, default 'http'
-                            database: config.dbname || 'iobroker',
+                            database: config.dbname,
                             requestTimeout: config.requestTimeout,
                         },
                         {
@@ -548,7 +550,7 @@ export class InfluxDBAdapter extends Adapter {
                             host: config.host,
                             port: config.port, // optional, default 8086
                             protocol: config.protocol, // optional, default 'http'
-                            database: config.dbname || 'iobroker',
+                            database: config.dbname,
                             requestTimeout: config.requestTimeout,
                         },
                         {
@@ -645,6 +647,7 @@ export class InfluxDBAdapter extends Adapter {
 
     async processMessage(msg: ioBroker.Message): Promise<void> {
         this.log.debug(`Incoming message ${msg.command} from ${msg.from}`);
+        this.config.dbname ||= 'iobroker';
         try {
             if (msg.command === 'features') {
                 // influxdb 1
@@ -747,6 +750,7 @@ export class InfluxDBAdapter extends Adapter {
     }
 
     async main(): Promise<void> {
+        this.config.dbname ||= 'iobroker';
         this.config.port = parseInt(this.config.port as string, 10) || 0;
         if (this.config.relogLastValueOnStart === undefined) {
             this.config.relogLastValueOnStart = true;
@@ -2984,12 +2988,10 @@ export class InfluxDBAdapter extends Adapter {
         // There seems to be no officially supported way to detect this, so we check it by forcing a type-conflict;
         const booleanTypeCheckQuery = `
         from(bucket: "${this.config.dbname}")
-        |> range(${options.start ? `start: ${new Date(options.start).toISOString()}, ` : `start: ${new Date(options.end! - ((this.config.retention as number) || 31536000) * 1000).toISOString()}, `}stop: ${new Date(options.end!).toISOString()})
-        |> filter(fn: (r) => r["_field"] == "value")
-        |> filter(fn: (r) => r["_measurement"] == "${id}" and contains(value: r._value, set: [true, false]))
-        ${this.config.usetags ? ' |> duplicate(column: "_value", as: "value")' : ' |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")'}
-        |> group()
-    `;
+|> range(${options.start ? `start: ${new Date(options.start).toISOString()}, ` : `start: ${new Date(options.end! - ((this.config.retention as number) || 31536000) * 1000).toISOString()}, `}stop: ${new Date(options.end!).toISOString()})
+|> filter(fn: (r) => r["_field"] == "value" and r["_measurement"] == "${id}" and contains(value: r._value, set: [true, false]))
+${this.config.usetags ? ' |> duplicate(column: "_value", as: "value")' : ' |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")'}
+|> group()`;
 
         try {
             const storedCount = await this.storeBufferedSeries(id);
@@ -3051,7 +3053,7 @@ export class InfluxDBAdapter extends Adapter {
                     let fluxQuery = `from(bucket: "${this.config.dbname}") `;
 
                     fluxQuery += ` |> range(${options.start ? `start: ${new Date(options.start).toISOString()}, ` : `start: ${new Date(options.end! - ((this.config.retention as number) || 31536000) * 1000).toISOString()}, `}stop: ${new Date(options.end!).toISOString()})`;
-                    fluxQuery += ` |> filter(fn: (r) => r["_measurement"] == "${id}")`;
+                    fluxQuery += ` |> filter(fn: (r) => r["_measurement"] == "${id}"${resultsFromInfluxDB && supportsAggregates ? ` and r["_field"] == "value"` : ''})`; // we cannot aggregate ack or from
 
                     if (!this.config.usetags) {
                         fluxQuery += ' |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")';
@@ -3134,7 +3136,7 @@ export class InfluxDBAdapter extends Adapter {
                             // get one entry "before" the defined timeframe for displaying purposes
                             addFluxQuery = `from(bucket: "${this.config.dbname}") 
 |> range(start: ${new Date(options.start - ((this.config.retention as number) || 31536000) * 1000).toISOString()}, stop: ${new Date(options.start - 1).toISOString()}) 
-|> filter(fn: (r) => r["_measurement"] == "${id}") 
+|> filter(fn: (r) => r["_measurement"] == "${id}"${resultsFromInfluxDB && supportsAggregates ? ` and r["_field"] == "value"` : ''}) 
 |> last()
 ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")' : ''}`;
 
@@ -3143,7 +3145,7 @@ ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valu
                         // get one entry "after" the defined timeframe for displaying purposes
                         addFluxQuery = `from(bucket: "${this.config.dbname}") 
 |> range(start: ${new Date(options.end! + 1).toISOString()}) 
-|> filter(fn: (r) => r["_measurement"] == "${id}") 
+|> filter(fn: (r) => r["_measurement"] == "${id}"${resultsFromInfluxDB && supportsAggregates ? ` and r["_field"] == "value"` : ''}) 
 |> first()
 ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")' : ''}`;
                         fluxQueries.push(addFluxQuery);
