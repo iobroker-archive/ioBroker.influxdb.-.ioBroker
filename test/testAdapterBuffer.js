@@ -17,13 +17,13 @@ let now;
 
 function checkConnectionOfAdapter(cb, counter) {
     counter = counter || 0;
-    console.log('Try check #' + counter);
+    console.log(`Try check #${counter}`);
     if (counter > 30) {
         cb && cb('Cannot check connection');
         return;
     }
 
-    console.log('Checking alive key for key: ' + adapterShortName);
+    console.log(`Checking alive key for key: ${adapterShortName}`);
     states.getState(`system.adapter.${adapterShortName}.0.alive`, (err, state) => {
         err && console.error(err);
         if (state && state.val) {
@@ -38,7 +38,7 @@ function checkConnectionOfAdapter(cb, counter) {
 function checkValueOfState(id, value, cb, counter) {
     counter = counter || 0;
     if (counter > 20) {
-        return cb && cb('Cannot check value Of State ' + id);
+        return cb && cb(`Cannot check value Of State ${id}`);
     }
 
     states.getState(id, (err, state) => {
@@ -87,8 +87,8 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
 
             if (process.env.INFLUXDB2) {
                 const authToken = JSON.parse(process.env.AUTHTOKEN).token;
-                console.log('AUTHTOKEN=' + process.env.AUTHTOKEN);
-                console.log('extracted token =' + authToken);
+                console.log(`AUTHTOKEN=${process.env.AUTHTOKEN}`);
+                console.log(`extracted token =${authToken}`);
                 config.native.dbversion = '2.x';
 
                 let secret = await setup.getSecret();
@@ -236,7 +236,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
 
         setTimeout(function() {
             sendTo('influxdb.0', 'query', 'SHOW FIELD KEYS FROM "influxdb.0.testValue"', result => {
-                console.log('result: ' + JSON.stringify(result.result, null, 2));
+                console.log(`result: ${JSON.stringify(result.result, null, 2)}`);
                 let found = false;
                 for (let i = 0; i < result.result[0].length; i++) {
                     if (result.result[0][i].fieldKey === 'value') {
@@ -260,7 +260,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
                     expect(found).to.be.true;
 
                     sendTo('influxdb.0', 'query', 'SHOW FIELD KEYS FROM "system.adapter.influxdb.0.uptime"', function (result3) {
-                        console.log('result3: ' + JSON.stringify(result3.result, null, 2));
+                        console.log(`result3: ${JSON.stringify(result3.result, null, 2)}`);
                         let found = false;
                         for (let i = 0; i < result3.result[0].length; i++) {
                             if (result3.result[0][i].fieldKey === 'value') {

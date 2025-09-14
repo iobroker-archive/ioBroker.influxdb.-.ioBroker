@@ -79,20 +79,18 @@ export default class DatabaseInfluxDB1x extends Database {
             return Promise.reject(new Error('No connection to InfluxDB'));
         }
 
-        const rows = await this.connection.query<
-            {
-                name: string;
-                // looks like "0h0m0s" for infinite retention, '3600s', ...
-                duration: string;
-                shardGroupDuration: string;
-                replicaN: number;
-                default: boolean;
-            }[]
-        >(`SHOW RETENTION POLICIES ON "${dbname}"`);
+        const rows = await this.connection.query<{
+            name: string;
+            // looks like "0h0m0s" for infinite retention, '3600s', ...
+            duration: string;
+            shardGroupDuration: string;
+            replicaN: number;
+            default: boolean;
+        }>(`SHOW RETENTION POLICIES ON "${dbname}"`);
         const regex = /(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/;
         let retentionTime: number | undefined;
         let retentionName: string | null = null;
-        rows[0].forEach(row => {
+        rows.forEach(row => {
             if (row.default) {
                 const regMatch = row.duration.match(regex);
                 if (regMatch) {

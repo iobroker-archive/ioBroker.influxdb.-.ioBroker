@@ -1,6 +1,6 @@
 export type ValuesForInflux = {
     value: string | number | boolean;
-    time: Date;
+    time: number;
     from: string;
     q: number;
     ack: boolean;

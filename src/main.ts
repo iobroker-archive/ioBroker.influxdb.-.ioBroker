@@ -1313,7 +1313,7 @@ export class InfluxDBAdapter extends Adapter {
         //this.log.debug('write value ' + state.val + ' for ' + id);
         const influxFields: ValuesForInflux = {
             value: state.val,
-            time: new Date(state.ts),
+            time: state.ts,
             from: state.from || '',
             q: state.q || 0,
             ack: !!state.ack,
