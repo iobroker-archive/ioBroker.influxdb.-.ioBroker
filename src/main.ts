@@ -2628,7 +2628,7 @@ export class InfluxDBAdapter extends Adapter {
                 query = addQuery + query;
             }
             addQuery = `;SELECT value from "${id}" WHERE time >= '${new Date(options.end!).toISOString()}' LIMIT 1`;
-            query = query + addQuery;
+            query += addQuery;
         }
 
         if (debugLog) {
