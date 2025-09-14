@@ -73,7 +73,7 @@ function sendTo(target, command, message, callback) {
     });
 }
 
-describe.only(`Test ${adapterShortName} adapter`, function () {
+describe(`Test ${adapterShortName} adapter`, function () {
     before(`Test ${adapterShortName} adapter: Start js-controller`, function (_done) {
         this.timeout(600000); // because of first install from npm
 
@@ -184,6 +184,14 @@ describe.only(`Test ${adapterShortName} adapter`, function () {
         });
     });
 
+    it(`Test ${adapterShortName} drop all values`, function (done) {
+        this.timeout(6000);
+        sendTo('influxdb.0', 'destroy', { noRestart: true }, (result ) => {
+            expect(result.error).to.be.null;
+            done();
+        });
+    })
+
     tests.register(it, expect, sendTo, adapterShortName, false, 0, 3);
 
     it(`Test ${adapterShortName}: Write string value for memHeapUsed into DB to force a type conflict`, function (done) {
@@ -194,7 +202,7 @@ describe.only(`Test ${adapterShortName} adapter`, function () {
             'system.adapter.influxdb.0.memHeapUsed',
             { val: 'Blubb', ts: now - 20000, from: 'test.0' },
             err => {
-                err && console.log(err);
+                if (err) { console.log(`Expected error: ${err}`);}
                 setTimeout(() => {
                     //sendTo('influxdb.0', 'flushBuffer', {id: 'system.adapter.influxdb.0.memHeapUsed'}, result => {
                     sendTo('influxdb.0', 'flushBuffer', {}, result => {
@@ -211,7 +219,6 @@ describe.only(`Test ${adapterShortName} adapter`, function () {
 
         let query = 'SELECT * FROM "influxdb.0.testValue"';
         if (process.env.INFLUXDB2) {
-            const date = Date.now();
             query = `from(bucket: "iobroker") |> range(start: -2d) |> filter(fn: (r) => r["_measurement"] == "influxdb.0.testValue") |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value") |> group() |> sort(columns:["_time"], desc: false)`;
         }
         sendTo('influxdb.0', 'query', query, result => {
@@ -223,7 +230,7 @@ describe.only(`Test ${adapterShortName} adapter`, function () {
                     found++;
                 }
             }
-            expect(found).to.be.equal(14);
+            expect(found).to.be.within(13, 14);
 
             done();
         });

@@ -606,20 +606,38 @@ export class InfluxDBAdapter extends Adapter {
         }
         try {
             await this._client.dropDatabase(this.config.dbname);
-            this.sendTo(msg.from, msg.command, { error: null }, msg.callback);
-            // restart adapter
-            setTimeout(() => {
-                void this.getForeignObject(`system.this.${this.namespace}`, (error, obj) => {
-                    if (!error) {
-                        if (obj) {
-                            void this.setForeignObject(obj._id, obj);
+
+            // tests need a clear database at start
+            if (!msg.message?.noRestart) {
+                this.sendTo(msg.from, msg.command, { error: null }, msg.callback);
+                // restart adapter
+                setTimeout(() => {
+                    void this.getForeignObject(`system.adapter.${this.namespace}`, (error, obj) => {
+                        if (!error) {
+                            if (obj) {
+                                void this.setForeignObject(obj._id, obj);
+                            }
+                        } else {
+                            this.log.error(`Cannot read object "system.adapter.${this.namespace}": ${error}`);
+                            void this.stop?.();
                         }
-                    } else {
-                        this.log.error(`Cannot read object "system.this.${this.namespace}": ${error}`);
-                        void this.stop?.();
-                    }
-                });
-            }, 2000);
+                    });
+                }, 2000);
+            } else {
+                // create db
+                await this._client.createDatabase(this.config.dbname);
+                try {
+                    await this._client.applyRetentionPolicyToDB(this.config.dbname, this.config.retention as number);
+                } catch (error) {
+                    // Ignore issues with creating/altering retention policy, as it might be due to insufficient permissions
+                    this.log.warn(extractError(error));
+                }
+
+                if (this.config.dbversion === '2.x') {
+                    await this.checkMetaDataStorageType();
+                }
+                this.sendTo(msg.from, msg.command, { error: null }, msg.callback);
+            }
         } catch (error) {
             this.sendTo(msg.from, msg.command, { error: extractError(error) }, msg.callback);
         }
@@ -957,7 +975,7 @@ export class InfluxDBAdapter extends Adapter {
     async writeInitialValue(realId: string, id: string): Promise<void> {
         const state = await this.getForeignStateAsync(realId);
         if (state && this._influxDPs[id]) {
-            state.from = `system.this.${this.namespace}`;
+            state.from = `system.adapter.${this.namespace}`;
             this._influxDPs[id].state = state;
             if (this.config.relogLastValueOnStart) {
                 this._tasksStart.push(id);
@@ -1131,7 +1149,7 @@ export class InfluxDBAdapter extends Adapter {
             if (timerRelog) {
                 state = Object.assign({}, state);
                 state.ts = Date.now();
-                state.from = `system.this.${this.namespace}`;
+                state.from = `system.adapter.${this.namespace}`;
                 settings.enableDebugLogs &&
                     this.log.debug(
                         `timed-relog ${id}, value=${state.val}, lastLogTime=${this._influxDPs[id].lastLogTime}, ts=${state.ts}`,
@@ -2516,7 +2534,11 @@ export class InfluxDBAdapter extends Adapter {
         }
 
         let resultsFromInfluxDB =
-            options.aggregate !== 'onchange' && options.aggregate !== 'none' && options.aggregate !== 'minmax';
+            !msg.message.useAdapter &&
+            options.aggregate !== 'onchange' &&
+            options.aggregate !== 'none' &&
+            options.aggregate !== 'minmax';
+
         if (options.aggregate === 'integral' && options.integralInterpolation === 'linear') {
             resultsFromInfluxDB = false;
         }
@@ -3245,9 +3267,10 @@ ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valu
             this.log.debug(`query: ${query}`);
 
             try {
-                const rows = await this._client?.query<
+                let rows = await this._client?.query<
                     {
-                        time: number;
+                        time?: number;
+                        ts?: number;
                         _start: number;
                         _stop: number;
                         value: number;
@@ -3255,28 +3278,27 @@ ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valu
                     }[]
                 >(query);
                 this.setConnected(true);
+                if (Array.isArray(rows) && rows.length && !Array.isArray(rows[0])) {
+                    // The new influx lib returns only one array, sp reformat it because of backwards compatibility
+                    rows = [rows as any];
+                }
+
                 this.log.debug(`result: ${JSON.stringify(rows)}`);
 
-                const result: IobDataEntry[] = [];
+                // as the answer from DB could have any type as we request not only time series, just try to format time and value
                 for (let r = 0, l = rows.length; r < l; r++) {
                     for (let rr = 0, ll = rows[r].length; rr < ll; rr++) {
-                        const item: IobDataEntry = {
-                            ts: 0,
-                            val: null,
-                        };
-                        if (rows[r][rr].val !== undefined) {
-                            item.val = rows[r][rr].val;
-                        } else if (rows[r][rr].value !== undefined) {
-                            item.val = rows[r][rr].value;
+                        const item = rows[r][rr];
+                        if (item.time) {
+                            item.ts = new Date(item.time).getTime();
+                            delete item.time;
+                        } else if (item._start && item._stop) {
+                            const startTime = new Date(item._start).getTime();
+                            const stopTime = new Date(item._stop).getTime();
+                            item.ts = startTime + (stopTime - startTime) / 2;
+                        } else if (item.value !== undefined) {
+                            item.val = item.value;
                         }
-                        if (rows[r][rr].time) {
-                            item.ts = new Date(rows[r][rr].time).getTime();
-                        } else if (rows[r][rr]._start && rows[r][rr]._stop) {
-                            const startTime = new Date(rows[r][rr]._start).getTime();
-                            const stopTime = new Date(rows[r][rr]._stop).getTime();
-                            item.ts = Math.round(startTime + (stopTime - startTime) / 2);
-                        }
-                        result.push(item);
                     }
                 }
 
@@ -3284,7 +3306,7 @@ ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valu
                     msg.from,
                     msg.command,
                     {
-                        result,
+                        result: rows,
                         ts: Date.now(),
                     },
                     msg.callback,
@@ -3347,46 +3369,35 @@ ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valu
             this.log.debug(`queries: ${queries}`);
 
             try {
-                const rows = await this._client?.query<
+                let rows = await this._client?.query<
                     {
-                        time: number;
+                        time?: number;
+                        ts?: number;
                         value: number;
                         val: number;
-                        ts: number;
                         q: number;
                         from: string;
                         ack: boolean;
                     }[]
                 >(queries);
                 this.setConnected(true);
+                if (Array.isArray(rows) && rows.length && !Array.isArray(rows[0])) {
+                    // The new influx lib returns only one array, sp reformat it because of backwards compatibility
+                    rows = [rows as any];
+                }
+
                 this.log.debug(`result: ${JSON.stringify(rows)}`);
-                const result: IobDataEntry[] = [];
+
+                // as the answer from DB could have any type as we request not only time series, just try to format time and value
                 for (let r = 0, l = rows.length; r < l; r++) {
                     for (let rr = 0, ll = rows[r].length; rr < ll; rr++) {
-                        const item: IobDataEntry = {
-                            ts: 0,
-                            val: null,
-                        };
-                        if (rows[r][rr].value !== undefined) {
-                            item.val = rows[r][rr].value;
-                        } else if (rows[r][rr].val !== undefined) {
-                            item.val = rows[r][rr].val;
+                        const item = rows[r][rr];
+                        if (item.time) {
+                            item.ts = new Date(item.time).getTime();
+                            delete item.time;
+                        } else if (item.value !== undefined) {
+                            item.val = item.value;
                         }
-                        if (rows[r][rr].time) {
-                            item.ts = new Date(rows[r][rr].time).getTime();
-                        } else if (rows[r][rr].ts) {
-                            item.ts = new Date(rows[r][rr].ts).getTime();
-                        }
-                        if (rows[r][rr].from !== undefined) {
-                            item.from = rows[r][rr].from;
-                        }
-                        if (rows[r][rr].ack !== undefined) {
-                            item.ack = rows[r][rr].ack;
-                        }
-                        if (rows[r][rr].q !== undefined) {
-                            item.q = rows[r][rr].q;
-                        }
-                        result.push(item);
                     }
                 }
 
@@ -3394,7 +3405,7 @@ ${!this.config.usetags ? '|> pivot(rowKey:["_time"], columnKey: ["_field"], valu
                     msg.from,
                     msg.command,
                     {
-                        result,
+                        result: rows,
                         ts: Date.now(),
                     },
                     msg.callback,

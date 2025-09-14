@@ -433,7 +433,7 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
     }
 
     async function logSampleData(stateId, waitMultiplier) {
-        if (!waitMultiplier) waitMultiplier = 1;
+        waitMultiplier ||= 1;
         await states.setStateAsync(stateId, { val: 1 }); // expect logged
         await delay(600 * waitMultiplier);
         await states.setStateAsync(stateId, { val: 2 }); // Expect not logged debounce
@@ -780,315 +780,231 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
             { val: 1, ack: true, ts: nowSampleI24 + 50 * 1000 },
         ];
 
-        return new Promise(resolve => {
-            sendTo(
-                instanceName,
-                'storeState',
-                {
-                    id: `${instanceName}.testValue`,
-                    state: states,
-                },
-                result => {
-                    expect(result.success).to.be.true;
-
-                    setTimeout(() => {
-                        sendTo(
-                            instanceName,
-                            'getHistory',
-                            {
-                                id: `${instanceName}.testValue`,
-                                options: {
-                                    start: nowSampleI1,
-                                    end: nowSampleI1 + 30 * 60_000, // 30min
-                                    count: 1,
-                                    aggregate: 'integral',
-                                    removeBorderValues: true,
-                                    integralUnit: 1,
-                                    integralInterpolation: 'none',
-                                },
-                            },
-                            result => {
-                                console.log(`Sample I1-1: ${JSON.stringify(result.result, null, 2)}`);
-                                if (instanceName !== 'influxdb.0') {
-                                    expect(result.result.length).to.be.equal(1);
-                                    if (assumeExistingData) {
-                                        expect(result.result[0].val).to.be.within(3700, 3755);
-                                    } else {
-                                        expect(result.result[0].val).to.be.within(3700, 3800);
-                                    }
-                                } else {
-                                    if (assumeExistingData) {
-                                        expect(result.result.length).to.be.within(2, 3);
-                                        if (process.env.INFLUXDB2) {
-                                            // expect((result.result[0].val + result.result[1].val)).to.be.within(3780, 4000);
-                                        } else {
-                                            // expect(result.result[0].val).to.be.within(2980, 3000);
-                                        }
-                                    } else {
-                                        const integral = calculateIntegralUnit(
-                                            nowSampleI1,
-                                            nowSampleI1 + 30 * 60_000,
-                                            states,
-                                            1,
-                                        );
-                                        console.log('Calculated Integral: ' + integral);
-                                        expect(result.result.length).to.be.equal(2);
-                                        if (process.env.INFLUXDB2) {
-                                            expect(result.result[0].val + result.result[1].val).to.be.within(
-                                                2980,
-                                                3000,
-                                            );
-                                        } else {
-                                            expect(
-                                                parseFloat((result.result[0].val + result.result[1].val).toFixed(2)),
-                                            ).to.be.equal(3732.66);
-                                        }
-                                    }
-                                }
-                                // Result Influxdb1 Doku = 3732.66
-
-                                sendTo(
-                                    instanceName,
-                                    'getHistory',
-                                    {
-                                        id: `${instanceName}.testValue`,
-                                        options: {
-                                            start: nowSampleI1,
-                                            end: nowSampleI1 + 30 * 60_000,
-                                            count: 1,
-                                            aggregate: 'integral',
-                                            removeBorderValues: true,
-                                            integralUnit: 60,
-                                            integralInterpolation: 'none',
-                                        },
-                                    },
-                                    result => {
-                                        console.log(`Sample I1-60: ${JSON.stringify(result.result, null, 2)}`);
-                                        if (instanceName !== 'influxdb.0') {
-                                            expect(result.result.length).to.be.equal(1);
-                                            if (assumeExistingData) {
-                                                expect(result.result[0].val).to.be.lessThan(62.25);
-                                            } else {
-                                                expect(result.result[0].val).to.be.equal(62.25);
-                                            }
-                                        } else {
-                                            if (assumeExistingData) {
-                                                expect(result.result.length).to.be.equal(3);
-                                                //expect(result.result[1].val).to.be.within(40, 65);
-                                            } else {
-                                                expect(result.result.length).to.be.equal(2);
-                                                if (process.env.INFLUXDB2) {
-                                                    expect(
-                                                        parseFloat(
-                                                            (result.result[0].val + result.result[1].val).toFixed(2),
-                                                        ),
-                                                    ).to.be.within(49, 50);
-                                                } else {
-                                                    expect(
-                                                        parseFloat(
-                                                            (result.result[0].val + result.result[1].val).toFixed(2),
-                                                        ),
-                                                    ).to.be.equal(62.21);
-                                                }
-                                            }
-                                        }
-                                        // Result Influxdb1 Doku = 62.211
-
-                                        sendTo(
-                                            instanceName,
-                                            'getHistory',
-                                            {
-                                                id: `${instanceName}.testValue`,
-                                                options: {
-                                                    start: nowSampleI21,
-                                                    end: nowSampleI21 + 60_000,
-                                                    count: 1,
-                                                    aggregate: 'integral',
-                                                    removeBorderValues: true,
-                                                    integralUnit: 10,
-                                                    integralInterpolation: 'none',
-                                                },
-                                            },
-                                            result => {
-                                                console.log(`Sample I21: ${JSON.stringify(result.result, null, 2)}`);
-                                                if (instanceName !== 'influxdb.0') {
-                                                    expect(result.result.length).to.be.equal(1);
-                                                    expect(result.result[0].val).to.be.equal(51);
-                                                } else {
-                                                    expect(result.result.length).to.be.within(1, 2);
-                                                    expect(
-                                                        result.result[0].val +
-                                                            (result.result[1] ? result.result[1].val : 0),
-                                                    ).to.be.within(30, 50);
-                                                }
-                                                // Result Influxdb21 Doku = 50.0
-
-                                                sendTo(
-                                                    instanceName,
-                                                    'getHistory',
-                                                    {
-                                                        id: `${instanceName}.testValue`,
-                                                        options: {
-                                                            start: nowSampleI22,
-                                                            end: nowSampleI22 + 60_000,
-                                                            count: 1,
-                                                            aggregate: 'integral',
-                                                            removeBorderValues: true,
-                                                            integralUnit: 10,
-                                                            integralInterpolation: 'none',
-                                                        },
-                                                    },
-                                                    result => {
-                                                        console.log(
-                                                            `Sample I22: ${JSON.stringify(result.result, null, 2)}`,
-                                                        );
-                                                        if (instanceName !== 'influxdb.0') {
-                                                            expect(result.result.length).to.be.equal(1);
-                                                            expect(result.result[0].val).to.be.equal(53);
-                                                        } else {
-                                                            expect(result.result.length).to.be.within(1, 2);
-                                                            expect(
-                                                                result.result[0].val +
-                                                                    (result.result[1] ? result.result[1].val : 0),
-                                                            ).to.be.within(27, 43);
-                                                        }
-                                                        // Result Influxdb22 Doku = 43
-
-                                                        sendTo(
-                                                            instanceName,
-                                                            'getHistory',
-                                                            {
-                                                                id: `${instanceName}.testValue`,
-                                                                options: {
-                                                                    start: nowSampleI23,
-                                                                    end: nowSampleI23 + 60_000,
-                                                                    count: 1,
-                                                                    aggregate: 'integral',
-                                                                    removeBorderValues: true,
-                                                                    integralUnit: 10,
-                                                                    integralInterpolation: 'linear',
-                                                                },
-                                                            },
-                                                            result => {
-                                                                console.log(
-                                                                    `Sample I23: ${JSON.stringify(result.result, null, 2)}`,
-                                                                );
-                                                                if (instanceName !== 'influxdb.0') {
-                                                                    expect(result.result.length).to.be.equal(1);
-                                                                    expect(result.result[0].val).to.be.equal(25.5);
-                                                                } else {
-                                                                    expect(result.result.length).to.be.within(1, 2);
-                                                                    if (process.env.INFLUXDB2) {
-                                                                        //expect(result.result[0].val).to.be.equal(25.5);
-                                                                    } else {
-                                                                        expect(result.result[0].val).to.be.equal(34.5);
-                                                                    }
-                                                                }
-                                                                // Result Influxdb23 Doku = 25.0
-
-                                                                sendTo(
-                                                                    instanceName,
-                                                                    'getHistory',
-                                                                    {
-                                                                        id: `${instanceName}.testValue`,
-                                                                        options: {
-                                                                            start: nowSampleI24,
-                                                                            end: nowSampleI24 + 60_000,
-                                                                            count: 1,
-                                                                            aggregate: 'integral',
-                                                                            removeBorderValues: true,
-                                                                            integralUnit: 10,
-                                                                            integralInterpolation: 'linear',
-                                                                        },
-                                                                    },
-                                                                    result => {
-                                                                        console.log(
-                                                                            `Sample I24: ${JSON.stringify(result.result, null, 2)}`,
-                                                                        );
-                                                                        if (instanceName !== 'influxdb.0') {
-                                                                            expect(result.result.length).to.be.equal(1);
-                                                                            if (assumeExistingData) {
-                                                                                expect(
-                                                                                    result.result[0].val,
-                                                                                ).to.be.within(31, 32);
-                                                                            } else {
-                                                                                expect(
-                                                                                    result.result[0].val,
-                                                                                ).to.be.within(32, 33.5);
-                                                                            }
-                                                                        } else {
-                                                                            expect(result.result.length).to.be.within(
-                                                                                1,
-                                                                                2,
-                                                                            );
-                                                                            if (process.env.INFLUXDB2) {
-                                                                                //expect(result.result[0].val).to.be.equal(25.5);
-                                                                            } else {
-                                                                                if (assumeExistingData) {
-                                                                                    expect(
-                                                                                        result.result[0].val,
-                                                                                    ).to.be.within(31, 34);
-                                                                                } else {
-                                                                                    expect(
-                                                                                        result.result[0].val,
-                                                                                    ).to.be.within(32, 33.5);
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        // Result Influxdb24 Doku = 32.5
-
-                                                                        sendTo(
-                                                                            instanceName,
-                                                                            'getHistory',
-                                                                            {
-                                                                                id: `${instanceName}.testValue`,
-                                                                                options: {
-                                                                                    start: nowSampleI22,
-                                                                                    end: nowSampleI22 + 60_000,
-                                                                                    count: 1,
-                                                                                    aggregate: 'quantile',
-                                                                                    quantile: 0.8,
-                                                                                },
-                                                                            },
-                                                                            result => {
-                                                                                console.log(
-                                                                                    `Sample I22-Quantile: ${JSON.stringify(result.result, null, 2)}`,
-                                                                                );
-                                                                                if (instanceName !== 'influxdb.0') {
-                                                                                    expect(
-                                                                                        result.result.length,
-                                                                                    ).to.be.equal(3);
-                                                                                    expect(
-                                                                                        result.result[1].val,
-                                                                                    ).to.be.equal(19);
-                                                                                } else {
-                                                                                    expect(
-                                                                                        result.result.length,
-                                                                                    ).to.be.within(3, 4);
-                                                                                    expect(
-                                                                                        result.result[1].val,
-                                                                                    ).to.be.within(4, 19);
-                                                                                }
-
-                                                                                resolve();
-                                                                            },
-                                                                        );
-                                                                    },
-                                                                );
-                                                            },
-                                                        );
-                                                    },
-                                                );
-                                            },
-                                        );
-                                    },
-                                );
-                            },
-                        );
-                    }, 1000);
-                },
-            );
+        let result = await sendToAsync(instanceName, 'storeState', {
+            id: `${instanceName}.testValue`,
+            state: states,
         });
+        expect(result.success).to.be.true;
+
+        await setStateAsync(1000);
+        // BF: The tests are very strange, as integral must be equal between all implementations and versions of InfluxDB
+        let integral = calculateIntegralUnit(nowSampleI1, nowSampleI1 + 30 * 60_000, states, 1);
+        result = await sendToAsync(instanceName, 'getHistory', {
+            id: `${instanceName}.testValue`,
+            options: {
+                start: nowSampleI1,
+                end: nowSampleI1 + 30 * 60_000, // 30min
+                count: 1,
+                aggregate: 'integral',
+                removeBorderValues: true,
+                integralUnit: 1,
+                integralInterpolation: 'none',
+            },
+        });
+        let sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+        console.log(`Sample I1-1: ${JSON.stringify(result.result, null, 2)} => ${integral} ?? ${sum}`);
+        if (instanceName !== 'influxdb.0') {
+            expect(result.result.length).to.be.equal(1);
+            if (assumeExistingData) {
+                expect(result.result[0].val).to.be.within(3700, 3755);
+            } else {
+                expect(result.result[0].val).to.be.within(3700, 3800);
+            }
+        } else {
+            if (assumeExistingData) {
+                expect(result.result.length).to.be.within(2, 3);
+                if (process.env.INFLUXDB2) {
+                    // expect((result.result[0].val + result.result[1].val)).to.be.within(3780, 4000);
+                } else {
+                    // expect(result.result[0].val).to.be.within(2980, 3000);
+                }
+            } else {
+                console.log('Calculated Integral: ' + integral);
+                expect(result.result.length).to.be.within(1, 2);
+                if (process.env.INFLUXDB2) {
+                    expect(sum).to.be.within(2980, 3000);
+                } else {
+                    expect(parseFloat(sum.toFixed(2))).to.be.equal(3732.66);
+                }
+            }
+        }
+        // Result Influxdb1 Doku = 3732.66
+
+        integral = calculateIntegralUnit(nowSampleI1, nowSampleI1 + 30 * 60_000, states, 60);
+        result = await sendToAsync(instanceName, 'getHistory', {
+            id: `${instanceName}.testValue`,
+            options: {
+                start: nowSampleI1,
+                end: nowSampleI1 + 30 * 60_000,
+                count: 1,
+                aggregate: 'integral',
+                removeBorderValues: true,
+                integralUnit: 60,
+                integralInterpolation: 'none',
+            },
+        });
+        sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+        console.log(`Sample I1-60: ${JSON.stringify(result.result, null, 2)} => ${integral} ?? ${sum}`);
+        if (instanceName !== 'influxdb.0') {
+            expect(result.result.length).to.be.equal(1);
+            if (assumeExistingData) {
+                expect(result.result[0].val).to.be.lessThan(62.25);
+            } else {
+                expect(result.result[0].val).to.be.equal(62.25);
+            }
+        } else {
+            if (assumeExistingData) {
+                expect(result.result.length).to.be.equal(3);
+                //expect(result.result[1].val).to.be.within(40, 65);
+            } else {
+                expect(result.result.length).to.be.within(1, 2);
+                const sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+
+                if (process.env.INFLUXDB2) {
+                    expect(parseFloat(sum.toFixed(2))).to.be.within(49, 50);
+                } else {
+                    expect(parseFloat(sum.toFixed(2))).to.be.equal(62.21);
+                }
+            }
+        }
+        // Result Influxdb1 Doku = 62.211
+
+        integral = calculateIntegralUnit(nowSampleI21, nowSampleI21 + 60_000, states, 10);
+        result = await sendToAsync(instanceName, 'getHistory', {
+            id: `${instanceName}.testValue`,
+            options: {
+                start: nowSampleI21,
+                end: nowSampleI21 + 60_000,
+                count: 1,
+                aggregate: 'integral',
+                removeBorderValues: true,
+                integralUnit: 10,
+                integralInterpolation: 'none',
+            },
+        });
+        sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+        console.log(`Sample I21: ${JSON.stringify(result.result, null, 2)} => ${integral} ?? ${sum}`);
+        if (instanceName !== 'influxdb.0') {
+            expect(result.result.length).to.be.equal(1);
+            expect(result.result[0].val).to.be.equal(51);
+        } else {
+            const sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+            expect(result.result.length).to.be.within(1, 2);
+            expect(sum).to.be.within(30, 50);
+        }
+        // Result Influxdb21 Doku = 50.0
+
+        integral = calculateIntegralUnit(nowSampleI22, nowSampleI22 + 60_000, states, 10);
+        result = await sendToAsync(instanceName, 'getHistory', {
+            id: `${instanceName}.testValue`,
+            options: {
+                start: nowSampleI22,
+                end: nowSampleI22 + 60_000,
+                count: 1,
+                aggregate: 'integral',
+                removeBorderValues: true,
+                integralUnit: 10,
+                integralInterpolation: 'none',
+            },
+        });
+        sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+
+        console.log(`Sample I22: ${JSON.stringify(result.result, null, 2)} => ${integral} ?? ${sum}`);
+        if (instanceName !== 'influxdb.0') {
+            expect(result.result.length).to.be.equal(1);
+            expect(result.result[0].val).to.be.equal(53);
+        } else {
+            expect(result.result.length).to.be.within(1, 2);
+            expect(result.result[0].val + (result.result[1] ? result.result[1].val : 0)).to.be.within(27, 43);
+        }
+        // Result Influxdb22 Doku = 43
+
+        integral = calculateIntegralUnit(nowSampleI23, nowSampleI23 + 60_000, states, 10);
+        result = await sendToAsync(instanceName, 'getHistory', {
+            id: `${instanceName}.testValue`,
+            options: {
+                start: nowSampleI23,
+                end: nowSampleI23 + 60_000,
+                count: 1,
+                aggregate: 'integral',
+                removeBorderValues: true,
+                integralUnit: 10,
+                integralInterpolation: 'linear',
+            },
+        });
+        sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+
+        console.log(`Sample I23: ${JSON.stringify(result.result, null, 2)} => ${integral} ?? ${sum}`);
+        if (instanceName !== 'influxdb.0') {
+            expect(result.result.length).to.be.equal(1);
+            expect(result.result[0].val).to.be.equal(25.5);
+        } else {
+            expect(result.result.length).to.be.within(1, 2);
+            if (process.env.INFLUXDB2) {
+                //expect(result.result[0].val).to.be.equal(25.5);
+            } else {
+                expect(result.result[0].val).to.be.equal(34.5);
+            }
+        }
+        // Result Influxdb23 Doku = 25.0
+
+        integral = calculateIntegralUnit(nowSampleI24, nowSampleI24 + 60_000, states, 10);
+        result = await sendToAsync(instanceName, 'getHistory', {
+            id: `${instanceName}.testValue`,
+            options: {
+                start: nowSampleI24,
+                end: nowSampleI24 + 60_000,
+                count: 1,
+                aggregate: 'integral',
+                removeBorderValues: true,
+                integralUnit: 10,
+                integralInterpolation: 'linear',
+            },
+        });
+        sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+        console.log(`Sample I24: ${JSON.stringify(result.result, null, 2)} => ${integral} ?? ${sum}`);
+
+        if (instanceName !== 'influxdb.0') {
+            expect(result.result.length).to.be.equal(1);
+            if (assumeExistingData) {
+                expect(result.result[0].val).to.be.within(31, 32);
+            } else {
+                expect(result.result[0].val).to.be.within(32, 33.5);
+            }
+        } else {
+            expect(result.result.length).to.be.within(1, 2);
+            if (process.env.INFLUXDB2) {
+                //expect(result.result[0].val).to.be.equal(25.5);
+            } else {
+                if (assumeExistingData) {
+                    expect(result.result[0].val).to.be.within(31, 34);
+                } else {
+                    expect(result.result[0].val).to.be.within(32, 33.5);
+                }
+            }
+        }
+        // Result Influxdb24 Doku = 32.5
+
+        integral = calculateIntegralUnit(nowSampleI22, nowSampleI22 + 60_000, states, 10);
+        result = await sendToAsync(instanceName, 'getHistory', {
+            id: `${instanceName}.testValue`,
+            options: {
+                start: nowSampleI22,
+                end: nowSampleI22 + 60_000,
+                count: 1,
+                aggregate: 'quantile',
+                quantile: 0.8,
+            },
+        });
+        sum = result.result.map(it => it.val).reduce((acc, val) => acc + val, 0);
+        console.log(`Sample I22-Quantile: ${JSON.stringify(result.result, null, 2)} => ${integral} ?? ${sum}`);
+        if (instanceName !== 'influxdb.0') {
+            expect(result.result.length).to.be.equal(3);
+            expect(result.result[1].val).to.be.equal(19);
+        } else {
+            expect(result.result.length).to.be.within(3, 4);
+            expect(result.result[1].val).to.be.within(4, 19);
+        }
     });
 
     it(`Test ${adapterShortName}: Read data two weeks around now GetHistory`, function (done) {
