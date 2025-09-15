@@ -23,8 +23,8 @@ function checkConnectionOfAdapter(cb, counter) {
         return;
     }
 
-    console.log(`Checking alive key for key : ${adapterShortName}`);
-    states.getState(`system.adapter.${adapterShortName}.0.alive`, (err, state) => {
+    console.log(`Checking alive key for key : influx-tags`);
+    states.getState(`system.adapter.influx-tags.0.alive`, (err, state) => {
         if (err) {
             console.error(err);
         }
@@ -56,8 +56,8 @@ function sendTo(target, command, message, callback) {
     });
 }
 
-describe(`Test ${adapterShortName} adapter`, function () {
-    before(`Test ${adapterShortName} adapter: Start js-controller`, function (_done) {
+describe(`Test influx-tags adapter`, function () {
+    before(`Test influx-tags adapter: Start js-controller`, function (_done) {
         this.timeout(600000); // because of first install from npm
 
         setup.setupController(async () => {
@@ -108,7 +108,7 @@ describe(`Test ${adapterShortName} adapter`, function () {
         });
     });
 
-    it(`Test ${adapterShortName} adapter: Check if adapter started`, function (done) {
+    it(`Test influx-tags adapter: Check if adapter started`, function (done) {
         this.timeout(60000);
 
         checkConnectionOfAdapter(res => {
@@ -161,7 +161,7 @@ describe(`Test ${adapterShortName} adapter`, function () {
                                     expect(result.error).to.be.undefined;
                                     expect(result.success).to.be.true;
 
-                                    // wait till adapter receives the new settings
+                                    // wait till the adapter receives the new settings
                                     setTimeout(() => done(), 2000);
                                 },
                             );
@@ -176,7 +176,7 @@ describe(`Test ${adapterShortName} adapter`, function () {
         // Test only with Influxdb 2.x
         tests.register(it, expect, sendTo, adapterShortName, false, 0, 3, 'influx-tags');
 
-        it(`Test ${adapterShortName}: Write string value for memHeapUsed into DB to force a type conflict`, function (done) {
+        it(`Test influx-tags: Write string value for memHeapUsed into DB to force a type conflict`, function (done) {
             this.timeout(5000);
             now = Date.now();
 
@@ -200,7 +200,7 @@ describe(`Test ${adapterShortName} adapter`, function () {
             );
         });
 
-        it(`Test ${adapterShortName}: Read values from DB using query`, function (done) {
+        it(`Test influx-tags: Read values from DB using query`, function (done) {
             this.timeout(10000);
 
             states.getState('influxdb.0.testValueCounter', (err, state) => {
@@ -225,7 +225,7 @@ describe(`Test ${adapterShortName} adapter`, function () {
             });
         });
 
-        it(`Test ${adapterShortName}: Check Datapoint Types`, function (done) {
+        it(`Test influx-tags: Check Datapoint Types`, function (done) {
             this.timeout(65000);
 
             if (process.env.INFLUXDB2) {
@@ -288,7 +288,7 @@ describe(`Test ${adapterShortName} adapter`, function () {
             }, 60000);
         });
 
-        it(`Test ${adapterShortName}: Check that storageType is set now for memHeapUsed`, function (done) {
+        it(`Test influx-tags: Check that storageType is set now for memHeapUsed`, function (done) {
             this.timeout(5000);
 
             objects.getObject('system.adapter.influxdb.0.memHeapUsed', (err, obj) => {
@@ -300,7 +300,7 @@ describe(`Test ${adapterShortName} adapter`, function () {
         });
     }
 
-    after(`Test ${adapterShortName} adapter: Stop js-controller`, function (done) {
+    after(`Test influx-tags adapter: Stop js-controller`, function (done) {
         this.timeout(15000);
 
         setup.stopController(normalTerminated => {

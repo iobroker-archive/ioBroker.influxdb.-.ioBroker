@@ -175,15 +175,24 @@ export interface InfluxDBAdapterConfig {
     enableDebugLogs: boolean;
     limit: number | string;
 
-    dockerInflux: boolean;
-    dockerInfluxStopIfInstanceStopped: boolean;
-    dockerInfluxPort: number | string;
-    dockerInfluxAutoImageUpdate: boolean;
-
-    dockerGrafana: boolean;
-    dockerGrafanaStopIfInstanceStopped: boolean;
-    dockerGrafanaPort: number | string;
-    dockerGrafanaAutoImageUpdate: boolean;
+    dockerInflux?: {
+        enabled?: boolean;
+        bind?: string;
+        stopIfInstanceStopped?: boolean;
+        port?: number | string;
+        autoImageUpdate?: boolean;
+    };
+    dockerGrafana?: {
+        enabled?: boolean;
+        bind?: string;
+        stopIfInstanceStopped?: boolean;
+        port?: number | string;
+        autoImageUpdate?: boolean;
+        adminSecurityPassword?: string;
+        serverRootUrl?: string;
+        plugins?: string[];
+        usersAllowSignUp?: boolean;
+    };
 }
 
 export interface InfluxDbCustomConfig {

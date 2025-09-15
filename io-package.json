@@ -303,7 +303,25 @@
     "disableSkippedValueLogging": false,
     "enableLogging": false,
     "customRetentionDuration": 365,
-    "relogLastValueOnStart": true
+    "relogLastValueOnStart": true,
+    "dockerInflux": {
+      "enabled": false,
+      "bind": "127.0.0.1",
+      "stopIfInstanceStopped": true,
+      "port": "8086",
+      "autoImageUpdate": true
+    },
+    "dockerGrafana": {
+      "enabled": false,
+      "bind": "0.0.0.0",
+      "stopIfInstanceStopped": true,
+      "port": "3000",
+      "autoImageUpdate": true,
+      "adminSecurityPassword": "iobroker",
+      "serverRootUrl": "",
+      "plugins": [],
+      "usersAllowSignUp": true
+    }
   },
   "protectedNative": [
     "password",

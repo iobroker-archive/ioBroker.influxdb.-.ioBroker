@@ -23,8 +23,8 @@ function checkConnectionOfAdapter(cb, counter) {
         return;
     }
 
-    console.log(`Checking alive key for key: ${adapterShortName}`);
-    states.getState(`system.adapter.${adapterShortName}.0.alive`, (err, state) => {
+    console.log(`Checking alive key for key: influx-buffer`);
+    states.getState(`system.adapter.influx-buffer.0.alive`, (err, state) => {
         if (err) {
             console.error(err);
         }
@@ -56,8 +56,8 @@ function sendTo(target, command, message, callback) {
     });
 }
 
-describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
-    before(`Test ${adapterShortName} adapter: Start js-controller`, function (_done) {
+describe(`Test influx-buffer adapter with Buffered write`, function () {
+    before(`Test influx-buffer adapter: Start js-controller`, function (_done) {
         this.timeout(600000); // because of first install from npm
 
         setup.setupController(async () => {
@@ -113,7 +113,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
         });
     });
 
-    it(`Test ${adapterShortName} adapter: Check if adapter started`, function (done) {
+    it(`Test influx-buffer adapter: Check if adapter started`, function (done) {
         this.timeout(60000);
 
         checkConnectionOfAdapter(res => {
@@ -192,7 +192,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
 
     tests.register(it, expect, sendTo, adapterShortName, false, 0, 3, 'influx-buffer');
 
-    it(`Test ${adapterShortName}: Write string value for memHeapUsed into DB to force a type conflict`, function (done) {
+    it(`Test influx-buffer: Write string value for memHeapUsed into DB to force a type conflict`, function (done) {
         this.timeout(5000);
         now = Date.now();
 
@@ -214,7 +214,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
         );
     });
 
-    it(`Test ${adapterShortName}: Read values from DB using query`, function (done) {
+    it(`Test influx-buffer: Read values from DB using query`, function (done) {
         this.timeout(10000);
 
         states.getState('influxdb.0.testValueCounter', (err, state) => {
@@ -241,7 +241,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
         });
     });
 
-    it(`Test ${adapterShortName}: Check Datapoint Types`, function (done) {
+    it(`Test influx-buffer: Check Datapoint Types`, function (done) {
         this.timeout(65000);
 
         if (process.env.INFLUXDB2) {
@@ -303,7 +303,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
         }, 60000);
     });
 
-    it(`Test ${adapterShortName}: Check that storageType is set now for memHeapUsed`, function (done) {
+    it(`Test influx-buffer: Check that storageType is set now for memHeapUsed`, function (done) {
         this.timeout(5000);
 
         objects.getObject('system.adapter.influxdb.0.memHeapUsed', (err, obj) => {
@@ -314,7 +314,7 @@ describe(`Test ${adapterShortName} adapter with Buffered write`, function () {
         });
     });
 
-    after(`Test ${adapterShortName} adapter: Stop js-controller`, function (done) {
+    after(`Test influx-buffer adapter: Stop js-controller`, function (done) {
         this.timeout(15000);
 
         setup.stopController(normalTerminated => {

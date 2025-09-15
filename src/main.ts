@@ -510,9 +510,9 @@ export class InfluxDBAdapter extends Adapter {
             let lClient;
             this.log.debug(`TEST DB Version: ${config.dbversion}`);
             let dockerCreated = false;
-            if (config.dockerInflux) {
+            if (config.dockerInflux?.enabled) {
                 // Start docker container if not running and then stop it
-                const influxDockerConfig: ContainerConfig = this.getDockerConfig(config);
+                const influxDockerConfig: ContainerConfig = this.getDockerConfigInflux(config);
                 if (!this.dockerManagerForInflux) {
                     dockerCreated = true;
                     influxDockerConfig.iobStopOnUnload = true;
@@ -892,7 +892,7 @@ export class InfluxDBAdapter extends Adapter {
 
         if (this.config.dockerInflux) {
             const containerConfigs: ContainerConfig[] = [];
-            containerConfigs.push(this.getDockerConfig(this.config, this.config.dockerInfluxAutoImageUpdate));
+            containerConfigs.push(this.getDockerConfigInflux(this.config, this.config.dockerInflux?.autoImageUpdate));
 
             if (this.config.dockerGrafana) {
                 containerConfigs.push(this.getDockerConfigGrafana(this.config));
@@ -911,7 +911,10 @@ export class InfluxDBAdapter extends Adapter {
         }
     }
 
-    getDockerConfig(config: InfluxDBAdapterConfig, dockerAutoImageUpdate?: boolean): ContainerConfig {
+    getDockerConfigInflux(config: InfluxDBAdapterConfig, dockerAutoImageUpdate?: boolean): ContainerConfig {
+        config.dockerInflux ||= {
+            enabled: false,
+        };
         // docker run -d -p 8086:8086 \
         //   -v $PWD/data:/var/lib/influxdb2 \
         //   -v $PWD/config:/etc/influxdb2 \
@@ -922,23 +925,23 @@ export class InfluxDBAdapter extends Adapter {
         //   -e DOCKER_INFLUXDB_INIT_BUCKET=my-bucket \
         //   influxdb:2
         config.dbversion = '2.x';
-        config.dockerInfluxPort = parseInt(config.dockerInfluxPort as string, 10) || 8086;
+        config.dockerInflux.port = parseInt((config.dockerInflux.port as string) || '8086', 10) || 8086;
         config.protocol = 'http';
         this.dockerFolder = join(getAbsoluteDefaultDataDir(), this.namespace);
         const influxDockerConfig: ContainerConfig = {
             iobEnabled: true,
             iobMonitoringEnabled: true,
             iobAutoImageUpdate: !!dockerAutoImageUpdate,
-            iobStopOnUnload: config.dockerInfluxStopIfInstanceStopped || false,
+            iobStopOnUnload: config.dockerInflux.stopIfInstanceStopped || false,
 
             // influxdb image: https://hub.docker.com/_/influxdb. Only version 2 is supported
             image: 'influxdb:2',
             name: `iobroker_${this.namespace}`,
             ports: [
                 {
-                    hostPort: config.dockerInfluxPort,
+                    hostPort: config.dockerInflux.port,
                     containerPort: 8086,
-                    hostIP: '127.0.0.1', // only localhost to disable authentication and https safely
+                    hostIP: config.dockerInflux.bind || '127.0.0.1', // only localhost to disable authentication and https safely
                 },
             ],
             mounts: [
@@ -982,7 +985,46 @@ export class InfluxDBAdapter extends Adapter {
     }
 
     getDockerConfigGrafana(config: InfluxDBAdapterConfig): ContainerConfig {
-        throw new Error('Method not implemented.');
+        config.dockerGrafana ||= {
+            enabled: false,
+        };
+        config.dockerGrafana.port = parseInt((config.dockerGrafana.port as string) || '3000', 10) || 3000;
+        this.dockerFolder ||= join(getAbsoluteDefaultDataDir(), this.namespace);
+        const dockerConfig: ContainerConfig = {
+            iobEnabled: config.dockerGrafana.enabled !== false,
+            iobMonitoringEnabled: true,
+            iobAutoImageUpdate: !!config.dockerGrafana.autoImageUpdate,
+            iobStopOnUnload: config.dockerGrafana.stopIfInstanceStopped || false,
+
+            // influxdb image: https://hub.docker.com/_/influxdb. Only version 2 is supported
+            image: 'grafana/grafana',
+            name: `iobroker_grafana_${this.namespace}`,
+            ports: [
+                {
+                    hostPort: config.dockerGrafana.port,
+                    containerPort: 3000,
+                    hostIP: config.dockerGrafana.bind || '127.0.0.1', // only localhost to disable authentication and https safely
+                },
+            ],
+            mounts: [
+                {
+                    source: `${this.dockerFolder}/grafana-data`,
+                    target: '/var/lib/grafana',
+                    type: 'bind',
+                },
+            ],
+            environment: {
+                GF_SECURITY_ADMIN_PASSWORD: config.dockerGrafana.adminSecurityPassword || 'iobroker',
+                GF_SERVER_ROOT_URL: config.dockerGrafana.serverRootUrl || '',
+                GF_INSTALL_PLUGINS: config.dockerGrafana.plugins?.map(it => it.trim()).join(',') || '',
+                GF_USERS_ALLOW_SIGN_UP: config.dockerGrafana.usersAllowSignUp ? 'true' : 'false',
+            },
+        };
+        // ensure that the folders exist
+        if (!existsSync(join(this.dockerFolder, 'grafana-data'))) {
+            mkdirSync(join(this.dockerFolder, 'grafana-data'), { recursive: true });
+        }
+        return dockerConfig;
     }
 
     async writeInitialValue(realId: string, id: string): Promise<void> {
