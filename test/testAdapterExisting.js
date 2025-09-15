@@ -24,7 +24,7 @@ function checkConnectionOfAdapter(cb, counter) {
     }
 
     console.log(`Checking alive key for key: influx-existing`);
-    states.getState(`system.adapter.influx.0.alive`, (err, state) => {
+    states.getState(`system.adapter.influxdb.0.alive`, (err, state) => {
         err && console.error(err);
         if (state && state.val) {
             cb?.();
