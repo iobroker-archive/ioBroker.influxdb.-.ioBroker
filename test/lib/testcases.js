@@ -14,12 +14,27 @@ function setStateAsync(id, state) {
         return Promise.reject(new Error('No states defined'));
     }
 
-    return new Promise((resolve, reject) => {
+    return new Promise(resolve => {
         states.setState(id, state, err => {
             if (err) {
                 console.log(err);
             }
             resolve();
+        });
+    });
+}
+
+function getStateAsync(id) {
+    if (!states?.setState) {
+        return Promise.reject(new Error('No states defined'));
+    }
+
+    return new Promise((resolve, reject) => {
+        states.getState(id, (err, state) => {
+            if (err) {
+                console.log(err);
+            }
+            resolve(state);
         });
     });
 }
@@ -80,14 +95,19 @@ async function preInit(_objects, _states, sendTo, adapterShortName) {
         changesMinDelta: 0.5,
     };
     await objects.setObjectAsync(`${instanceName}.testValue`, obj);
+    delete obj.common.custom;
+    // Count changes of `${instanceName}.testValue`
+    await objects.setObjectAsync(`${instanceName}.testValueCounter`, obj);
     obj = {
         common: {
             type: 'number',
             role: 'state',
             custom: {},
+            def: 0,
         },
         type: 'state',
     };
+    obj.common.custom = {};
     obj.common.custom[instanceName] = {
         enabled: true,
         changesOnly: true,
@@ -227,19 +247,31 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
         now = Date.now();
 
         (async () => {
+            let state = await getStateAsync(`${instanceName}.testValueCounter`);
+            if (!state?.val) {
+                state = { val: 0 };
+            }
             await setStateAsync(`${instanceName}.testValue`, { val: 1, ts: now + 1000 });
+            state.val++;
             await setTimeoutAsync(100);
             await setStateAsync(`${instanceName}.testValue`, { val: 2, ts: now + 10000 });
+            state.val++;
             await setTimeoutAsync(100);
             await setStateAsync(`${instanceName}.testValue`, { val: 2, ts: now + 13000 });
+            state.val++;
             await setTimeoutAsync(100);
             await setStateAsync(`${instanceName}.testValue`, { val: 2, ts: now + 15000 });
+            state.val++;
             await setTimeoutAsync(100);
             await setStateAsync(`${instanceName}.testValue`, { val: 2.2, ts: now + 16000 });
+            state.val++;
             await setTimeoutAsync(100);
             await setStateAsync(`${instanceName}.testValue`, { val: 2.5, ts: now + 17000 });
+            state.val++;
             await setTimeoutAsync(100);
             await setStateAsync(`${instanceName}.testValue`, { val: '+003.00', ts: now + 19000 });
+            state.val++;
+            await setStateAsync(`${instanceName}.testValueCounter`, { val: state.val });
             await setTimeoutAsync(100);
             await setStateAsync(`${instanceName}.testValue2`, { val: 1, ts: now + 12000 });
             await setTimeoutAsync(100);
@@ -325,37 +357,40 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
     it(`Test ${adapterShortName}: Read average from DB using GetHistory`, function (done) {
         this.timeout(25000);
 
-        sendTo(
-            instanceName,
-            'getHistory',
-            {
-                id: `${instanceName}.testValue`,
-                options: {
-                    start: now + 100,
-                    end: now + 30001,
-                    count: 2,
-                    aggregate: 'average',
-                    ignoreNull: true,
-                    addId: true,
+        states.getState(`${instanceName}.testValueCounter`, (err, state) => {
+            sendTo(
+                instanceName,
+                'getHistory',
+                {
+                    id: `${instanceName}.testValue`,
+                    options: {
+                        start: now + 100,
+                        end: now + 30001,
+                        count: 2,
+                        aggregate: 'average',
+                        ignoreNull: true,
+                        addId: true,
+                    },
                 },
-            },
-            result => {
-                console.log(JSON.stringify(result.result, null, 2));
-                if (instanceName !== 'influxdb.0') {
-                    expect(result.result.length).to.be.equal(4);
-                    expect(result.result[1].val).to.be.equal(1.5);
-                    expect(result.result[2].val).to.be.equal(2.57);
-                    expect(result.result[3].val).to.be.equal(2.57);
-                } else {
-                    expect(result.result.length).to.be.within(4, 5);
-                    expect(result.result[1].val).to.be.within(1, 1.5);
-                    expect(result.result[2].val).to.be.within(2, 3);
-                    expect(result.result[3].val).to.be.within(2, 3);
-                }
-                expect(result.result[0].id).to.be.equal(`${instanceName}.testValue`);
-                done();
-            },
-        );
+                result => {
+                    console.log(JSON.stringify(result.result, null, 2));
+                    console.log(`Expected counter: ${state.val}`);
+                    if (instanceName !== 'influxdb.0') {
+                        expect(result.result.length).to.be.equal(4);
+                        expect(result.result[1].val).to.be.equal(1.5);
+                        expect(result.result[2].val).to.be.equal(2.57);
+                        expect(result.result[3].val).to.be.equal(2.57);
+                    } else {
+                        expect(result.result.length).to.be.within(4, 5);
+                        expect(result.result[1].val).to.be.within(1, 1.5);
+                        expect(result.result[2].val).to.be.within(2, 3);
+                        expect(result.result[3].val).to.be.within(2, 3);
+                    }
+                    expect(result.result[0].id).to.be.equal(`${instanceName}.testValue`);
+                    done();
+                },
+            );
+        });
     });
 
     it(`Test ${adapterShortName}: Read minmax values from DB using GetHistory`, function (done) {
@@ -744,6 +779,8 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
         const nowSampleI23 = now.getTime() - 26 * 3_600_000;
         const nowSampleI24 = now.getTime() - 25 * 3_600_000;
 
+        let counterState = getStateAsync(`${instanceName}.testValueCounter`);
+
         const states = [
             { val: 2.064, ack: true, ts: nowSampleI1 }, // 1s = 3732.66
             { val: 2.116, ack: true, ts: nowSampleI1 + 6 * 60_000 },
@@ -775,6 +812,11 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
             { val: 19, ack: true, ts: nowSampleI24 + 30 * 1000 },
             { val: 1, ack: true, ts: nowSampleI24 + 50 * 1000 },
         ];
+        if (!counterState?.val) {
+            counterState = { val: 0 };
+        }
+        counterState.val += states.length;
+        await setStateAsync(`${instanceName}.testValueCounter`, { val: counterState.val });
 
         let result = await sendToAsync(instanceName, 'storeState', {
             id: `${instanceName}.testValue`,
@@ -1018,7 +1060,7 @@ function register(it, expect, sendTo, adapterShortName, writeNulls, assumeExisti
             },
             result => {
                 console.log(JSON.stringify(result.result, null, 2));
-                expect(result.result.length).to.be.equal(4);
+                expect(result.result.length).to.be.equal(5);
                 expect(result.result[0].id).to.be.equal(`${instanceName}.testValue`);
                 done();
             },

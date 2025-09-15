@@ -203,23 +203,25 @@ describe(`Test ${adapterShortName} adapter`, function () {
         it(`Test ${adapterShortName}: Read values from DB using query`, function (done) {
             this.timeout(10000);
 
-            let query = 'SELECT * FROM "influxdb.0.testValue"';
-            if (process.env.INFLUXDB2) {
-                const date = Date.now();
-                query = `from(bucket: "iobroker") |> range(start: -2d) |> filter(fn: (r) => r["_measurement"] == "influxdb.0.testValue") |> duplicate(column: "_value", as: "value") |> sort(columns:["_time"], desc: false)`;
-            }
-            sendTo('influxdb.0', 'query', query, result => {
-                console.log(JSON.stringify(result.result, null, 2));
-                expect(result.result[0].length).to.be.at.least(5);
-                let found = 0;
-                for (let i = 0; i < result.result[0].length; i++) {
-                    if (result.result[0][i].value >= 1 && result.result[0][i].value <= 3) {
-                        found++;
-                    }
+            states.getState('influxdb.0.testValueCounter', (err, state) => {
+                let query = 'SELECT * FROM "influxdb.0.testValue"';
+                if (process.env.INFLUXDB2) {
+                    query = `from(bucket: "iobroker") |> filter(fn: (r) => r["_measurement"] == "influxdb.0.testValue") |> duplicate(column: "_value", as: "value") |> sort(columns:["_time"], desc: false)`;
                 }
-                expect(found).to.be.equal(78);
+                sendTo('influxdb.0', 'query', query, result => {
+                    console.log(JSON.stringify(result.result, null, 2));
+                    console.log(`Expected results: ${state.val}`);
+                    expect(result.result[0].length).to.be.at.least(5);
+                    let found = 0;
+                    for (let i = 0; i < result.result[0].length; i++) {
+                        if (result.result[0][i].value >= 1 && result.result[0][i].value <= 3) {
+                            found++;
+                        }
+                    }
+                    expect(found).to.be.equal(78);
 
-                done();
+                    done();
+                });
             });
         });
 

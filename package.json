@@ -52,7 +52,7 @@
     ],
     "scripts": {
         "prepublishOnly": "npm run build",
-        "test": "node node_modules/mocha/bin/mocha --exit",
+        "test": "mocha --exit",
         "release": "release-script",
         "release-patch": "release-script patch --yes",
         "release-minor": "release-script minor --yes",
