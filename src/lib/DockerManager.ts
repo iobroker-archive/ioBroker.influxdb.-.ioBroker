@@ -1,19 +1,21 @@
 // This class implements docker commands using CLI and
-// It manages containers provided in constructor and monitors them
+// it monitors periodically the docker daemon status.
+// It manages containers defined in adapter.config.containers and monitors other containers
 
 import { promisify } from 'node:util';
 import { exec } from 'node:child_process';
 import type {
     ContainerConfig,
     ContainerInfo,
+    ContainerStats,
+    ContainerStatus,
     DiskUsage,
     DockerContainerInspect,
     DockerImageInspect,
     ImageInfo,
+    ContainerName,
+    ImageName,
 } from './dockerManager.types';
-
-type ImageName = string;
-type ContainerName = string;
 
 const execPromise = promisify(exec);
 
@@ -31,7 +33,7 @@ function removeUndefined(obj: any): any {
     return obj;
 }
 
-const dockerDefaults = {
+const dockerDefaults: Record<string, any> = {
     Tty: false,
     OpenStdin: false,
     AttachStdin: false,
@@ -77,21 +79,8 @@ function deepCompare(obj1: any, obj2: any, path: string[] = []): string[] {
     return diffs;
 }
 
-export interface ContainerStats {
-    cpu: number;
-    memUsed: number;
-    memMax: number;
-    netRead: number;
-    netWrite: number;
-    processes: number;
-    blockIoRead: number;
-    blockIoWrite: number;
-    ts: number;
-}
-
-export interface ContainerStatus extends ContainerStats {
-    status: 'created' | 'restarting' | 'running' | 'removing' | 'paused' | 'exited' | 'dead' | 'unknown';
-    statusTs: number;
+export interface DockerManagerAdapterConfig {
+    containers?: ContainerConfig[];
 }
 
 export default class DockerManager {
@@ -571,8 +560,8 @@ export default class DockerManager {
         for (const line of lines) {
             const parts = line.trim().split(/\s+/);
             if (parts.length >= 5 && parts[0] !== 'TYPE') {
-                let size: number;
-                let reclaimable: number;
+                let size: number | undefined;
+                let reclaimable: number | undefined;
 
                 if (parts[0] === 'Images') {
                     const sizeStr = parts[3];
@@ -619,8 +608,8 @@ export default class DockerManager {
                         reclaimable: reclaimable,
                     };
                 }
-                result.total.size += size!;
-                result.total.reclaimable += reclaimable!;
+                result.total.size += size || 0;
+                result.total.reclaimable += reclaimable || 0;
             }
         }
         return result;

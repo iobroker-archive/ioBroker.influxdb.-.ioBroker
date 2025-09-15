@@ -1,3 +1,5 @@
+export type ImageName = string;
+export type ContainerName = string;
 export type DockerContainerInspect = {
     Id: string;
     Created: string;
@@ -464,13 +466,13 @@ export interface ContainerConfig {
     iobMonitoringEnabled?: boolean; // ioBroker setting
 
     /** Image reference (repo:tag or ID). If omitted and build is set, the image comes from build */
-    image: string;
+    image: ImageName;
 
     /** Compose-style build (optional) */
     build?: BuildConfig;
 
     /** --name */
-    name: string;
+    name: ContainerName;
 
     /** Command & Entrypoint */
     command?: string[] | string; // CMD override
@@ -571,10 +573,6 @@ export interface ContainerConfig {
     __meta?: Record<string, any>;
 }
 
-export interface DockerManagerAdapterConfig {
-    containers?: ContainerConfig[];
-}
-
 export type SizeInfo = {
     total: number;
     reclaimable: number;
@@ -592,7 +590,7 @@ export type DiskUsage = {
 
 export type ContainerInfo = {
     id: string;
-    image: string;
+    image: ImageName;
     command: string;
     createdAt: string;
     status: 'created' | 'restarting' | 'running' | 'removing' | 'paused' | 'exited' | 'dead';
@@ -696,3 +694,20 @@ export type DockerImageTagsResponse = {
         digest: string;
     }[];
 };
+
+export interface ContainerStats {
+    cpu: number;
+    memUsed: number;
+    memMax: number;
+    netRead: number;
+    netWrite: number;
+    processes: number;
+    blockIoRead: number;
+    blockIoWrite: number;
+    ts: number;
+}
+
+export interface ContainerStatus extends ContainerStats {
+    status: 'created' | 'restarting' | 'running' | 'removing' | 'paused' | 'exited' | 'dead' | 'unknown';
+    statusTs: number;
+}

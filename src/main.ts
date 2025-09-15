@@ -890,7 +890,7 @@ export class InfluxDBAdapter extends Adapter {
 
         this.subscribeForeignObjects('*');
 
-        if (this.config.dockerInflux) {
+        if (this.config.dockerInflux?.enabled) {
             const containerConfigs: ContainerConfig[] = [];
             containerConfigs.push(this.getDockerConfigInflux(this.config, this.config.dockerInflux?.autoImageUpdate));
 
@@ -1012,6 +1012,11 @@ export class InfluxDBAdapter extends Adapter {
                     target: '/var/lib/grafana',
                     type: 'bind',
                 },
+                {
+                    source: `${this.dockerFolder}/grafana-provisioning`,
+                    target: '/etc/grafana/provisioning',
+                    type: 'bind',
+                },
             ],
             environment: {
                 GF_SECURITY_ADMIN_PASSWORD: config.dockerGrafana.adminSecurityPassword || 'iobroker',
@@ -1023,6 +1028,29 @@ export class InfluxDBAdapter extends Adapter {
         // ensure that the folders exist
         if (!existsSync(join(this.dockerFolder, 'grafana-data'))) {
             mkdirSync(join(this.dockerFolder, 'grafana-data'), { recursive: true });
+        }
+        if (!existsSync(join(this.dockerFolder, 'grafana-provisioning', 'datasources'))) {
+            mkdirSync(join(this.dockerFolder, 'grafana-provisioning', 'datasources'), { recursive: true });
+        }
+        if (!existsSync(join(this.dockerFolder, 'grafana-provisioning', 'datasources', 'datasource.yml'))) {
+            writeFileSync(
+                join(this.dockerFolder, 'grafana-provisioning', 'datasources', 'datasource.yml'),
+                `apiVersion: 1
+
+datasources:
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    url: http://localhost:${config.dockerInflux?.port || 8086}
+    jsonData:
+      version: Flux
+      organization: iobroker
+      defaultBucket: iobroker
+    secureJsonData:
+      token: ${dockerDefaultToken}  
+    isDefault: true
+`,
+            );
         }
         return dockerConfig;
     }
