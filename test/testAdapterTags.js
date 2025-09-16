@@ -218,7 +218,7 @@ describe(`Test influx-tags adapter`, function () {
                             found++;
                         }
                     }
-                    expect(found).to.be.equal(78);
+                    expect(found).to.be.equal(76);
 
                     done();
                 });

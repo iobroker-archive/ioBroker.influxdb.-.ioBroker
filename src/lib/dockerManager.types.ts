@@ -378,8 +378,8 @@ export interface Security {
     /** user namespace: --userns */
     usernsMode?: string; // e.g. "host", "private"
     /** --ipc / --pid */
-    ipc?: 'none' | 'host';
-    pid?: 'host';
+    ipc?: 'none' | 'host' | 'private';
+    pid?: 'host' | '';
     /** SELinux labels (compose style) */
     selinuxLabels?: string[];
     /** seccomp profile path or "unconfined" */

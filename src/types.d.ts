@@ -212,6 +212,7 @@ export interface InfluxDbCustomConfig {
     debounce: number | string;
     ignoreBelowZero: boolean | 'true' | 'false';
 }
+
 export interface InfluxDbCustomConfigTyped {
     enabled: boolean;
     debounceTime: number;

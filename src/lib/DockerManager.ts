@@ -19,65 +19,135 @@ import type {
 
 const execPromise = promisify(exec);
 
-// remove undefined entries recursively
-function removeUndefined(obj: any): any {
-    if (Array.isArray(obj)) {
-        return obj.map(v => (v && typeof v === 'object' ? removeUndefined(v) : v)).filter(v => v !== undefined);
-    } else if (obj && typeof obj === 'object') {
-        return Object.fromEntries(
-            Object.entries(obj)
-                .map(([k, v]) => [k, v && typeof v === 'object' ? removeUndefined(v) : v])
-                .filter(([_, v]) => v !== undefined),
-        );
-    }
-    return obj;
-}
-
 const dockerDefaults: Record<string, any> = {
-    Tty: false,
-    OpenStdin: false,
-    AttachStdin: false,
-    AttachStdout: true,
-    AttachStderr: true,
-    PublishAllPorts: false,
-    RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
-    LogConfig: { Type: 'json-file', Config: {} },
-    Privileged: false,
-    ReadonlyRootfs: false,
-    Init: false,
-    StopSignal: 'SIGTERM',
-    StopTimeout: undefined,
-    NetworkMode: 'default',
+    tty: false,
+    stdinOpen: false,
+    attachStdin: false,
+    attachStdout: false,
+    attachStderr: false,
+    openStdin: false,
+    publishAllPorts: false,
+    readOnly: false,
+    user: '',
+    workdir: '',
+    domainname: '',
+    macAddress: '',
+    networkMode: 'bridge',
 };
 
 function isDefault(value: any, def: any): boolean {
     return JSON.stringify(value) === JSON.stringify(def);
 }
 
-function deepCompare(obj1: any, obj2: any, path: string[] = []): string[] {
-    const diffs: string[] = [];
-
-    if (typeof obj1 !== typeof obj2) {
-        diffs.push(path.join('.'));
+function deepCompare(object1: any, object2: any): boolean {
+    if (typeof object1 === 'number') {
+        object1 = object1.toString();
     }
-
-    if (typeof obj1 !== 'object' || obj1 === null || obj2 === null || obj1 === undefined || obj2 === undefined) {
-        if (obj1 !== obj2) {
-            diffs.push(path.join('.'));
+    if (typeof object2 === 'number') {
+        object2 = object2.toString();
+    }
+    if (typeof object1 !== typeof object2) {
+        return false;
+    }
+    if (typeof object1 !== 'object' || object1 === null || object2 === null) {
+        return object1 === object2;
+    }
+    if (Array.isArray(object1)) {
+        if (!Array.isArray(object2) || object1.length !== object2.length) {
+            return false;
+        }
+        for (let i = 0; i < object1.length; i++) {
+            if (!deepCompare(object1[i], object2[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+    const keys1 = Object.keys(object1);
+    const keys2 = Object.keys(object2);
+    if (keys1.length !== keys2.length) {
+        return false;
+    }
+    for (const key of keys1) {
+        if (!deepCompare(object1[key], object2[key])) {
+            return false;
         }
     }
-    if (typeof obj1 === 'object') {
-        const keys = new Set([...Object.keys(obj1), ...Object.keys(obj2)]);
-        for (const key of keys) {
-            // ignore iob* properties as they belong to ioBroker configuration
-            if (key.startsWith('iob')) {
-                continue;
+    return true;
+}
+
+function compareConfigs(desired: ContainerConfig, existing: ContainerConfig): string[] {
+    const diffs: string[] = [];
+
+    const keys: (keyof ContainerConfig)[] = Object.keys(desired) as Array<keyof ContainerConfig>;
+
+    // We only compare keys that are in the desired config
+    for (const key of keys) {
+        // ignore iob* properties as they belong to ioBroker configuration
+        if (key.startsWith('iob')) {
+            continue;
+        }
+        // ignore hostname
+        if (key === 'hostname') {
+            continue;
+        }
+        if (typeof desired[key] === 'object' && desired[key] !== null) {
+            if (Array.isArray(desired[key])) {
+                if (!Array.isArray(existing[key]) || desired[key].length !== existing[key].length) {
+                    diffs.push(key);
+                } else {
+                    for (let i = 0; i < desired[key].length; i++) {
+                        if (!deepCompare(desired[key][i], existing[key][i])) {
+                            diffs.push(`${key}[${i}]`);
+                        }
+                    }
+                }
+            } else {
+                Object.keys(desired[key]).forEach((subKey: string) => {
+                    if (!deepCompare((desired as any)[key][subKey], (existing as any)[key][subKey])) {
+                        diffs.push(`${key}.${subKey}`);
+                    }
+                });
             }
-            diffs.push(...deepCompare(obj1[key], obj2[key], [...path, key]));
+        } else if (desired[key] !== existing[key]) {
+            diffs.push(key);
         }
     }
 
     return diffs;
+}
+
+// remove undefined entries recursively
+function removeUndefined(obj: any): any {
+    if (Array.isArray(obj)) {
+        const arr = obj.map(v => (v && typeof v === 'object' ? removeUndefined(v) : v)).filter(v => v !== undefined);
+        if (!arr.length) {
+            return undefined;
+        }
+        return arr;
+    }
+    if (obj && typeof obj === 'object') {
+        const _obj = Object.fromEntries(
+            Object.entries(obj)
+                .map(([k, v]) => [k, v && typeof v === 'object' ? removeUndefined(v) : v])
+                .filter(
+                    ([_, v]) =>
+                        v !== undefined &&
+                        v !== null &&
+                        v !== '' &&
+                        !(Array.isArray(v) && v.length === 0) &&
+                        !(typeof v === 'object' && Object.keys(v).length === 0),
+                ),
+        );
+        if (Object.keys(_obj).length === 0) {
+            return undefined;
+        }
+        return _obj;
+    }
+    if (obj === '') {
+        return undefined;
+    }
+    return obj;
 }
 
 export interface DockerManagerAdapterConfig {
@@ -215,9 +285,25 @@ export default class DockerManager {
         };
 
         obj = removeUndefined(obj);
-        Object.keys(dockerDefaults).forEach(name => {
+        Object.keys(obj).forEach(name => {
             if (isDefault((obj as any)[name], (dockerDefaults as any)[name])) {
                 delete (obj as any)[name];
+            }
+            if (name === 'mounts') {
+                (obj as any)[name] = (obj as any)[name].map((mount: any) => {
+                    const m = { ...mount };
+                    delete m.readOnly;
+                    return m;
+                });
+            }
+            if (name === 'ports') {
+                (obj as any)[name] = (obj as any)[name].map((port: any) => {
+                    const p = { ...port };
+                    if (p.protocol === 'tcp') {
+                        delete p.protocol;
+                    }
+                    return p;
+                });
             }
         });
 
@@ -301,7 +387,7 @@ export default class DockerManager {
         if (inspect) {
             const existingConfig = DockerManager.mapInspectToConfig(inspect);
             console.log('Compare existing config', existingConfig, ' and', container);
-            const diffs = deepCompare(existingConfig, container);
+            const diffs = compareConfigs(container, existingConfig);
             if (diffs.length) {
                 this.#adapter.log.info(
                     `Configuration of own container ${container.name} has changed: ${diffs.join(
