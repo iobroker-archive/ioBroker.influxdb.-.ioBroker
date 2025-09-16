@@ -199,7 +199,6 @@ describe(`Test influx-existing adapter`, function () {
         }
         sendTo('influxdb.0', 'query', query, result => {
             console.log(JSON.stringify(result.result, null, 2));
-            console.log(`Expected results: ${state.val}`);
             expect(result.result[0].length).to.be.at.least(5);
             let found = 0;
             for (let i = 0; i < result.result[0].length; i++) {

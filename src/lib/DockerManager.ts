@@ -66,14 +66,15 @@ function deepCompare(obj1: any, obj2: any, path: string[] = []): string[] {
             diffs.push(path.join('.'));
         }
     }
-
-    const keys = new Set([...Object.keys(obj1), ...Object.keys(obj2)]);
-    for (const key of keys) {
-        // ignore iob* properties as they belong to ioBroker configuration
-        if (key.startsWith('iob')) {
-            continue;
+    if (typeof obj1 === 'object') {
+        const keys = new Set([...Object.keys(obj1), ...Object.keys(obj2)]);
+        for (const key of keys) {
+            // ignore iob* properties as they belong to ioBroker configuration
+            if (key.startsWith('iob')) {
+                continue;
+            }
+            diffs.push(...deepCompare(obj1[key], obj2[key], [...path, key]));
         }
-        diffs.push(...deepCompare(obj1[key], obj2[key], [...path, key]));
     }
 
     return diffs;
