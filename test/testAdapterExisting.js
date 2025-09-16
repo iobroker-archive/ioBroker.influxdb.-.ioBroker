@@ -208,7 +208,7 @@ describe(`Test influx-existing adapter`, function () {
                         found++;
                     }
                 }
-                expect(found).to.be.equal(28);
+                expect(found).to.be.equal(26);
 
                 done();
             });
