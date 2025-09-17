@@ -16,6 +16,7 @@
                 "dockerGrafana.enabled": {
                     "newLine": true,
                     "type": "checkDocker",
+                    "hideVersion": true,
                     "label": "Use self-hosted Grafana in Docker",
                     "xs": 12
                 },
@@ -384,6 +385,7 @@
             "items": {
                 "dockerInflux.bind": {
                     "newLine": true,
+                    "listenOnAllPorts": true,
                     "type": "ip",
                     "label": "Start container on IP",
                     "sm": 12,
@@ -421,6 +423,7 @@
                 "dockerGrafana.bind": {
                     "type": "ip",
                     "label": "Start container on IP",
+                    "listenOnAllPorts": true,
                     "sm": 12,
                     "md": 8
                 },
@@ -435,7 +438,7 @@
                 "dockerGrafana.stopIfInstanceStopped": {
                     "newLine": true,
                     "type": "checkbox",
-                    "hidden": "!!dockerInflux?.stopIfInstanceStopped",
+                    "hidden": "!!data.dockerInflux?.stopIfInstanceStopped",
                     "label": "Stop container when instance stops",
                     "sm": 12,
                     "md": 6

@@ -160,42 +160,67 @@ function cleanContainerConfig(obj: ContainerConfig): ContainerConfig {
         if (name === 'mounts') {
             if (!obj.mounts) {
                 delete obj.mounts;
+                return;
             }
-            obj.mounts = obj.mounts!.map((mount: any) => {
+            obj.mounts = obj.mounts.map((mount: any) => {
                 const m = { ...mount };
                 delete m.readOnly;
                 return m;
             });
+            if (!obj.mounts.length) {
+                delete obj.mounts;
+                return;
+            }
+            obj.mounts?.sort((a, b) => a.target.localeCompare(b.target));
         }
         if (name === 'ports') {
             if (!obj.ports) {
                 delete obj.ports;
+                return;
             }
-            obj.ports = obj.ports!.map((port: any) => {
+            obj.ports = obj.ports.map((port: any) => {
                 const p = { ...port };
                 if (p.protocol === 'tcp') {
                     delete p.protocol;
                 }
                 return p;
             });
+            if (!obj.ports.length) {
+                delete obj.ports;
+                return;
+            }
+            obj.ports?.sort((a, b) => {
+                if (a.hostPort !== b.hostPort) {
+                    return parseInt(a.containerPort as string, 10) - parseInt(b.containerPort as string, 10);
+                }
+                if (a.hostIP !== b.hostIP && a.hostIP && b.hostIP) {
+                    return a.hostIP?.localeCompare(b.hostIP);
+                }
+                return 0;
+            });
         }
         if (name === 'environment') {
             if (!obj.environment) {
                 delete obj.environment;
+                return;
             }
             const env = obj.environment as { [key: string]: string };
             if (Object.keys(env).length) {
                 obj.environment = {};
-                Object.keys(env).forEach(key => {
-                    if (key && env[key]) {
-                        (obj.environment as any)[key] = env[key];
-                    }
-                });
+                Object.keys(env)
+                    .sort()
+                    .forEach(key => {
+                        if (key && env[key]) {
+                            (obj.environment as any)[key] = env[key];
+                        }
+                    });
             } else {
                 delete obj.environment;
             }
         }
     });
+
+    obj.volumes?.sort();
     return obj;
 }
 
@@ -461,63 +486,72 @@ export default class DockerManager {
         for (let c = 0; c < this.#ownContainers.length; c++) {
             const container = this.#ownContainers[c];
             if (container.iobEnabled !== false) {
-                let containerInfo = status.find(it => it.names === container.name);
-                let image = images.find(it => `${it.repository}:${it.tag}` === container.image);
-                if (container.iobAutoImageUpdate) {
-                    // ensure that the image is actual
-                    const newImage = await this.imageUpdate(container.image, true);
-                    if (newImage) {
-                        this.#adapter.log.info(
-                            `Image ${container.image} for own container ${container.name} was updated`,
-                        );
-                        if (containerInfo) {
-                            // destroy current container
-                            await this.containerRemove(containerInfo.id);
-                            containerInfo = undefined;
-                        }
-                        image = newImage;
-                    }
+                if (!container.image.includes(':')) {
+                    container.image += ':latest';
                 }
-                if (!image) {
-                    this.#adapter.log.info(`Pulling image ${container.image} for own container ${container.name}`);
-                    try {
-                        const result = await this.imagePull(container.image);
-                        if (result.stderr) {
-                            this.#adapter.log.warn(`Cannot pull image ${container.image}: ${result.stderr}`);
+                try {
+                    let containerInfo = status.find(it => it.names === container.name);
+                    let image = images.find(it => `${it.repository}:${it.tag}` === container.image);
+                    if (container.iobAutoImageUpdate) {
+                        // ensure that the image is actual
+                        const newImage = await this.imageUpdate(container.image, true);
+                        if (newImage) {
+                            this.#adapter.log.info(
+                                `Image ${container.image} for own container ${container.name} was updated`,
+                            );
+                            if (containerInfo) {
+                                // destroy current container
+                                await this.containerRemove(containerInfo.id);
+                                containerInfo = undefined;
+                            }
+                            image = newImage;
+                        }
+                    }
+                    if (!image) {
+                        this.#adapter.log.info(`Pulling image ${container.image} for own container ${container.name}`);
+                        try {
+                            const result = await this.imagePull(container.image);
+                            if (result.stderr) {
+                                this.#adapter.log.warn(`Cannot pull image ${container.image}: ${result.stderr}`);
+                                continue;
+                            }
+                        } catch (e) {
+                            this.#adapter.log.warn(`Cannot pull image ${container.image}: ${e.message}`);
                             continue;
                         }
-                    } catch (e) {
-                        this.#adapter.log.warn(`Cannot pull image ${container.image}: ${e.message}`);
-                        continue;
-                    }
-                    // Check that image is available now
-                    images = await this.imageList();
-                    image = images.find(it => `${it.repository}:${it.tag}` === container.image);
-                    if (!image) {
-                        this.#adapter.log.warn(
-                            `Image ${container.image} for own container ${container.name} not found after pull`,
-                        );
-                        continue;
-                    }
-                }
-
-                if (containerInfo) {
-                    await this.#ensureActualConfiguration(container);
-                    anyStartedOrRunning ||= !!container.iobMonitoringEnabled;
-                } else {
-                    // Create and start the container, as the container was not found
-                    this.#adapter.log.info(`Creating and starting own container ${container.name}`);
-
-                    try {
-                        const result = await this.containerRun(container);
-                        if (result.stderr) {
-                            this.#adapter.log.warn(`Cannot start own container ${container.name}: ${result.stderr}`);
-                        } else {
-                            anyStartedOrRunning ||= !!container.iobMonitoringEnabled;
+                        // Check that image is available now
+                        images = await this.imageList();
+                        image = images.find(it => `${it.repository}:${it.tag}` === container.image);
+                        if (!image) {
+                            this.#adapter.log.warn(
+                                `Image ${container.image} for own container ${container.name} not found after pull`,
+                            );
+                            continue;
                         }
-                    } catch (e) {
-                        this.#adapter.log.warn(`Cannot start own container ${container.name}: ${e.message}`);
                     }
+
+                    if (containerInfo) {
+                        await this.#ensureActualConfiguration(container);
+                        anyStartedOrRunning ||= !!container.iobMonitoringEnabled;
+                    } else {
+                        // Create and start the container, as the container was not found
+                        this.#adapter.log.info(`Creating and starting own container ${container.name}`);
+
+                        try {
+                            const result = await this.containerRun(container);
+                            if (result.stderr) {
+                                this.#adapter.log.warn(
+                                    `Cannot start own container ${container.name}: ${result.stderr}`,
+                                );
+                            } else {
+                                anyStartedOrRunning ||= !!container.iobMonitoringEnabled;
+                            }
+                        } catch (e) {
+                            this.#adapter.log.warn(`Cannot start own container ${container.name}: ${e.message}`);
+                        }
+                    }
+                } catch (e) {
+                    this.#adapter.log.warn(`Cannot check own container ${container.name}: ${e.message}`);
                 }
             }
         }
@@ -612,6 +646,9 @@ export default class DockerManager {
      */
     async imageUpdate(image: ImageName, ignoreIfNotExist?: boolean): Promise<ImageInfo | null> {
         const list = await this.imageList();
+        if (!image.includes(':')) {
+            image += ':latest';
+        }
         const existingImage = list.find(it => `${it.repository}:${it.tag}` === image);
         if (!existingImage && !ignoreIfNotExist) {
             throw new Error(`Image ${image} not found`);
@@ -733,6 +770,9 @@ export default class DockerManager {
     /** Pull an image from the registry */
     async imagePull(image: ImageName): Promise<{ stdout: string; stderr: string }> {
         try {
+            if (!image.includes(':')) {
+                image += ':latest';
+            }
             const result = await this.#exec(`pull ${image}`);
             const images = await this.imageList();
             if (!images.find(it => `${it.repository}:${it.tag}` === image)) {
