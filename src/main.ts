@@ -994,7 +994,9 @@ export class InfluxDBAdapter extends Adapter {
             iobEnabled: config.dockerGrafana.enabled !== false,
             iobMonitoringEnabled: true,
             iobAutoImageUpdate: !!config.dockerGrafana.autoImageUpdate,
-            iobStopOnUnload: config.dockerGrafana.stopIfInstanceStopped || false,
+            // Stop docker too if influxdb is stopped
+            iobStopOnUnload:
+                config.dockerInflux?.stopIfInstanceStopped || config.dockerGrafana.stopIfInstanceStopped || false,
 
             // influxdb image: https://hub.docker.com/_/influxdb. Only version 2 is supported
             image: 'grafana/grafana',

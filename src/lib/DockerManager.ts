@@ -150,6 +150,55 @@ function removeUndefined(obj: any): any {
     return obj;
 }
 
+function cleanContainerConfig(obj: ContainerConfig): ContainerConfig {
+    obj = removeUndefined(obj);
+
+    Object.keys(obj).forEach(name => {
+        if (isDefault((obj as any)[name], (dockerDefaults as any)[name])) {
+            delete (obj as any)[name];
+        }
+        if (name === 'mounts') {
+            if (!obj.mounts) {
+                delete obj.mounts;
+            }
+            obj.mounts = obj.mounts!.map((mount: any) => {
+                const m = { ...mount };
+                delete m.readOnly;
+                return m;
+            });
+        }
+        if (name === 'ports') {
+            if (!obj.ports) {
+                delete obj.ports;
+            }
+            obj.ports = obj.ports!.map((port: any) => {
+                const p = { ...port };
+                if (p.protocol === 'tcp') {
+                    delete p.protocol;
+                }
+                return p;
+            });
+        }
+        if (name === 'environment') {
+            if (!obj.environment) {
+                delete obj.environment;
+            }
+            const env = obj.environment as { [key: string]: string };
+            if (Object.keys(env).length) {
+                obj.environment = {};
+                Object.keys(env).forEach(key => {
+                    if (key && env[key]) {
+                        (obj.environment as any)[key] = env[key];
+                    }
+                });
+            } else {
+                delete obj.environment;
+            }
+        }
+    });
+    return obj;
+}
+
 export interface DockerManagerAdapterConfig {
     containers?: ContainerConfig[];
 }
@@ -181,7 +230,7 @@ export default class DockerManager {
      * @param inspect Inspect information
      */
     static mapInspectToConfig(inspect: DockerContainerInspect): ContainerConfig {
-        let obj: ContainerConfig = {
+        const obj: ContainerConfig = {
             image: inspect.Config.Image,
             name: inspect.Name.replace(/^\//, ''),
             command: inspect.Config.Cmd ?? undefined,
@@ -284,30 +333,7 @@ export default class DockerManager {
             __meta: undefined, // Eigene Metadaten
         };
 
-        obj = removeUndefined(obj);
-        Object.keys(obj).forEach(name => {
-            if (isDefault((obj as any)[name], (dockerDefaults as any)[name])) {
-                delete (obj as any)[name];
-            }
-            if (name === 'mounts') {
-                (obj as any)[name] = (obj as any)[name].map((mount: any) => {
-                    const m = { ...mount };
-                    delete m.readOnly;
-                    return m;
-                });
-            }
-            if (name === 'ports') {
-                (obj as any)[name] = (obj as any)[name].map((port: any) => {
-                    const p = { ...port };
-                    if (p.protocol === 'tcp') {
-                        delete p.protocol;
-                    }
-                    return p;
-                });
-            }
-        });
-
-        return obj;
+        return cleanContainerConfig(obj);
     }
 
     /**
@@ -368,7 +394,6 @@ export default class DockerManager {
                 this.#adapter.log.error(`Docker is not installed: ${stderr}`);
                 return false;
             }
-            this.#adapter.log.error(`Docker daemon is not running`);
 
             return stdout.includes('(running)');
         } catch {
@@ -387,6 +412,7 @@ export default class DockerManager {
         if (inspect) {
             const existingConfig = DockerManager.mapInspectToConfig(inspect);
             console.log('Compare existing config', existingConfig, ' and', container);
+            container = cleanContainerConfig(container);
             const diffs = compareConfigs(container, existingConfig);
             if (diffs.length) {
                 this.#adapter.log.info(
@@ -451,7 +477,8 @@ export default class DockerManager {
                         }
                         image = newImage;
                     }
-                } else if (!image) {
+                }
+                if (!image) {
                     this.#adapter.log.info(`Pulling image ${container.image} for own container ${container.name}`);
                     try {
                         const result = await this.imagePull(container.image);
@@ -765,7 +792,7 @@ export default class DockerManager {
      */
     async containerCreate(config: ContainerConfig): Promise<{ stdout: string; stderr: string }> {
         try {
-            return await this.#exec(`create ${this.#toDockerRun(config)}`);
+            return await this.#exec(`create ${this.#toDockerRun(config, true)}`);
         } catch (e) {
             return { stdout: '', stderr: e.message.toString() };
         }
@@ -792,7 +819,7 @@ export default class DockerManager {
                     containers = await this.containerList();
 
                     if (containers.find(it => it.id === containerInfo.id && it.status === 'running')) {
-                        this.#adapter.log.warn(`Cannot remove container: ${stopResult.stderr || stopResult.stderr}`);
+                        this.#adapter.log.warn(`Cannot remove container: ${stopResult.stderr || stopResult.stdout}`);
                         throw new Error(`Container ${containerInfo.id} still running after stop`);
                     }
                 }
@@ -801,11 +828,11 @@ export default class DockerManager {
 
                 containers = await this.containerList();
                 if (containers.find(it => it.id === containerInfo.id)) {
-                    this.#adapter.log.warn(`Cannot remove container: ${rmResult.stderr || rmResult.stderr}`);
+                    this.#adapter.log.warn(`Cannot remove container: ${rmResult.stderr || rmResult.stdout}`);
                     throw new Error(`Container ${containerInfo.id} still found after stop`);
                 }
             }
-            return await this.#exec(`create ${this.#toDockerRun(config)}`);
+            return await this.#exec(`create ${this.#toDockerRun(config, true)}`);
         } catch (e) {
             return { stdout: '', stderr: e.message.toString() };
         }
@@ -1085,11 +1112,11 @@ export default class DockerManager {
     /**
      * Build a docker run command string from ContainerConfig
      */
-    #toDockerRun(config: ContainerConfig): string {
+    #toDockerRun(config: ContainerConfig, create?: boolean): string {
         const args: string[] = [];
 
         // detach / interactive
-        if (config.detach !== false) {
+        if (config.detach !== false && !create) {
             // default is true
             args.push('-d');
         }
@@ -1119,7 +1146,9 @@ export default class DockerManager {
         // environment
         if (config.environment) {
             for (const [key, value] of Object.entries(config.environment)) {
-                args.push('-e', `${key}=${value}`);
+                if (key && value) {
+                    args.push('-e', `${key}=${value}`);
+                }
             }
         }
         if (config.envFile) {

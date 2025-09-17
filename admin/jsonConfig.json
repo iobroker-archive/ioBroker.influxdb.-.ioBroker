@@ -435,6 +435,7 @@
                 "dockerGrafana.stopIfInstanceStopped": {
                     "newLine": true,
                     "type": "checkbox",
+                    "hidden": "!!dockerInflux?.stopIfInstanceStopped",
                     "label": "Stop container when instance stops",
                     "sm": 12,
                     "md": 6
