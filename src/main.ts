@@ -168,7 +168,6 @@ export class InfluxDBAdapter extends Adapter {
     private _finished = false;
     // mapping from ioBroker ID to Alias ID
     private readonly _aliasMap: { [ioBrokerId: string]: string } = {};
-    private dockerFolder: string | null = null;
     private dockerManager: DockerManager | null = null;
 
     public constructor(options: Partial<AdapterOptions> = {}) {
@@ -929,7 +928,6 @@ export class InfluxDBAdapter extends Adapter {
         config.dbversion = '2.x';
         config.dockerInflux.port = parseInt((config.dockerInflux.port as string) || '8086', 10) || 8086;
         config.protocol = 'http';
-        this.dockerFolder = join(getAbsoluteDefaultDataDir(), this.namespace);
         const influxDockerConfig: ContainerConfig = {
             iobEnabled: true,
             iobMonitoringEnabled: true,
@@ -980,7 +978,6 @@ export class InfluxDBAdapter extends Adapter {
             enabled: false,
         };
         config.dockerGrafana.port = parseInt((config.dockerGrafana.port as string) || '3000', 10) || 3000;
-        this.dockerFolder ||= join(getAbsoluteDefaultDataDir(), this.namespace);
         const dockerConfig: ContainerConfig = {
             iobEnabled: config.dockerGrafana.enabled !== false,
             iobMonitoringEnabled: true,
