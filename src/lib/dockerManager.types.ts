@@ -501,7 +501,7 @@ export interface ContainerConfig {
     build?: BuildConfig;
 
     /** --name */
-    name: ContainerName | true;
+    name?: ContainerName;
 
     /** Command & Entrypoint */
     command?: string[] | string; // CMD override

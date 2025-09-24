@@ -516,7 +516,7 @@ export class InfluxDBAdapter extends Adapter {
                     dockerCreated = true;
                     influxDockerConfig.iobStopOnUnload = true;
                     influxDockerConfig.removeOnExit = true;
-                    this.dockerManager = new DockerManager(this, [influxDockerConfig]);
+                    this.dockerManager = new DockerManager(this, undefined, [influxDockerConfig]);
                 }
             }
             config.dbname ||= 'iobroker';
@@ -896,7 +896,7 @@ export class InfluxDBAdapter extends Adapter {
             if (this.config.dockerGrafana) {
                 containerConfigs.push(this.getDockerConfigGrafana(this.config));
             }
-            this.dockerManager = new DockerManager(this, containerConfigs);
+            this.dockerManager = new DockerManager(this, undefined, containerConfigs);
             await this.dockerManager.allOwnContainersChecked();
         }
 
@@ -938,7 +938,6 @@ export class InfluxDBAdapter extends Adapter {
 
             // influxdb image: https://hub.docker.com/_/influxdb. Only version 2 is supported
             image: 'influxdb:2',
-            name: true, // take default name iob_influxdb_<instance>
             ports: [
                 {
                     hostPort: config.dockerInflux.port,
