@@ -1,4 +1,15 @@
-import type { SmartDate } from './time';
+export type SmartDate = {
+    // From 1 to 31
+    date: number;
+    // From 1 to 12
+    month: number;
+    // from 1970 to 2300
+    year: number;
+    /** If "end" is true, the time will be calculated as "start of this day/month/hour" - 1ms */
+    end?: boolean;
+    /** Time zone (default is 1 - germany)  */
+    timeZone?: number;
+};
 
 export interface DataEntry {
     ts: number;

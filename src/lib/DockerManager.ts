@@ -22,7 +22,7 @@ import type {
 } from './dockerManager.types';
 import { createConnection } from 'node:net';
 import Docker, { type MountPropagation, type MountSettings, type MountType } from 'dockerode';
-import tar from 'tar-fs';
+import type { PackOptions, Pack } from 'tar-fs';
 
 const execPromise = promisify(exec);
 
@@ -284,9 +284,26 @@ export default class DockerManager {
     #driver: 'socket' | 'cli' | 'http' | 'https' = 'cli';
     #dockerode: Docker | null = null;
     #cliAvailable: boolean = false;
+    protected options: {
+        dockerApi?: boolean;
+        dockerApiHost?: string;
+        dockerApiPort?: number | string;
+        dockerApiProtocol?: 'http' | 'https';
+    };
+    #tarPack: ((cwd: string, opts?: PackOptions) => Pack) | null = null;
 
-    constructor(adapter: ioBroker.Adapter, containers?: ContainerConfig[]) {
+    constructor(
+        adapter: ioBroker.Adapter,
+        options?: {
+            dockerApi?: boolean;
+            dockerApiHost?: string;
+            dockerApiPort?: number | string;
+            dockerApiProtocol?: 'http' | 'https';
+        },
+        containers?: ContainerConfig[],
+    ) {
         this.adapter = adapter;
+        this.options = options || {};
         this.#ownContainers = containers || [];
         this.#waitReady = new Promise<void>(resolve => this.#init().then(() => resolve()));
         this.#waitAllChecked = new Promise<void>(resolve => (this.#waitAllCheckedResolve = resolve));
@@ -467,7 +484,14 @@ export default class DockerManager {
         // - https://localhost:2376 or
         // - CLI
         // Probe the socket
-        if (await DockerManager.checkDockerSocket()) {
+        if (this.options?.dockerApi && this.options.dockerApiHost && this.options.dockerApiPort) {
+            this.#driver = this.options.dockerApiProtocol || 'http';
+            this.#dockerode = new Docker({
+                host: this.options.dockerApiHost,
+                port: this.options.dockerApiPort,
+                protocol: this.options.dockerApiProtocol || 'http',
+            });
+        } else if (await DockerManager.checkDockerSocket()) {
             this.#driver = 'socket';
             this.#dockerode = new Docker({ socketPath: '/var/run/docker.sock' });
         } else if (await DockerManager.isDockerApiRunningOnPort(2375)) {
@@ -1416,6 +1440,14 @@ export default class DockerManager {
         }
     }
 
+    async containerCreateCompose(compose: string): Promise<{ stdout: string; stderr: string }> {
+        try {
+            return await this.#exec(`compose -f ${compose} create`);
+        } catch (e) {
+            return { stdout: '', stderr: e.message.toString() };
+        }
+    }
+
     /** List all images */
     async imageList(): Promise<ImageInfo[]> {
         if (this.#dockerode) {
@@ -2282,8 +2314,17 @@ export default class DockerManager {
             });
             try {
                 await container.start();
+                // Lazy loading tar-fs
+                if (!this.#tarPack) {
+                    await import('tar-fs')
+                        .then(tarFs => (this.#tarPack = tarFs.default.pack))
+                        .catch(e => this.adapter.log.error(`Cannot import tar-fs package: ${e.message}`));
+                }
+                if (!this.#tarPack) {
+                    throw new Error('Cannot load tar-fs package');
+                }
                 // use dockerode to copy files
-                const pack = tar.pack(sourcePath);
+                const pack = this.#tarPack(sourcePath);
                 await container.putArchive(pack, { path: '/data' });
                 return { stdout: 'Data copied to volume', stderr: '' };
             } catch (e) {
