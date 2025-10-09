@@ -2461,7 +2461,7 @@ datasources:
             start: msg.message.options.start,
             end: msg.message.options.end || new Date().getTime() + 5000000,
             step: parseInt(msg.message.options.step, 10) || undefined,
-            count: parseInt(msg.message.options.count, 10) || 500,
+            count: parseInt(msg.message.options.count, 10),
             aggregate: msg.message.options.aggregate || 'average', // One of: max, min, average, total
             limit:
                 parseInt(msg.message.options.limit, 10) ||
