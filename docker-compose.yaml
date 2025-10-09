@@ -30,7 +30,8 @@ services:
         labels:
             - 'iobEnabled=${config.dockerGrafana.enabled:-true}'
             - 'iobStopOnUnload=${config.dockerGrafana.stopIfInstanceStopped:-true}'
-            - 'iobCopyVolumes=./grafana-provisioning=>grafana_provisioning'
+            # `(force)` means that the content of the source is copied to the target by every start of the adapter
+            - 'iobCopyVolumes=./build/grafana-provisioning->grafana_provisioning(force)'
             - 'iobWaitForReady=true'
             - 'iobBackup=flux_data'
         container_name: grafana
